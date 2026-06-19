@@ -47,7 +47,8 @@ if search:
 # display a card for each pitcher with their line and projection
 for line in lines:
     with st.container(border=True):
-        predicted_ks = get_pitcher_projection(line['pitcher'])
+        with st.spinner(f"Loading {line['pitcher']}..."):
+            predicted_ks = get_pitcher_projection(line['pitcher'])
         col1, col2 = st.columns(2)
 
         with col1:
