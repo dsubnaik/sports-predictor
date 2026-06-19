@@ -20,7 +20,7 @@ def fetch_strikeout_lines():
     
     events = get_event_ids()
     results = []
-    for event in events[:3]:
+    for event in events:
         event_id = event['id']
         url = f'https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds'
         params = {
