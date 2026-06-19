@@ -3,6 +3,7 @@
 
 # pulls data pitch by pitch leve data
 from pybaseball import statcast_pitcher
+from pybaseball import playerid_lookup
 import pandas as pd
 
 #player_id is MLB's internal ID for each pitcher, ex SOnny Gray is 543243
@@ -41,8 +42,19 @@ def aggregate_to_starts(df):
 
     return agg
 
+def get_player_id(player_name):
+
+    #splits at the first space so it handles player with three names e
+    # ex. Luis Garcia Jr returns ['Luis', 'Garcia Jr']
+    parts = player_name.split(' ',1) 
+    first = parts[0]
+    last = parts[1]
+    result = playerid_lookup(last, first)
+
+    #return the MLBAM id from the first result
+
+    return result['key_mlbam'].iloc[0]
+
 if __name__ == "__main__":
-    df = fetch_pitcher_statcast(543243, '2023-03-30', '2023-10-01')
-    starts = aggregate_to_starts(df)
-    print(starts.shape)
-    print(starts)
+    player_id = get_player_id('Aaron Nola')
+    print(player_id)
