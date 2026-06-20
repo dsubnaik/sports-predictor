@@ -7,9 +7,9 @@ from model.predict import predict_strikeouts
 from odds.fetch_lines import parse_lines 
 from odds.fetch_lines import fetch_strikeout_lines
 
-st.set_page_config(page_title = "Sports Predcitor", layout = "wide")
+st.set_page_config(page_title = "Sports Predictor", layout = "wide")
 st.title("Gain an Edge")
-st.subheader("MLB Pitcher Strikout Projections")
+st.subheader("MLB Pitcher Strikeout Projections")
 search = st.text_input("Search Pitcher...")
 
 # cache lines for 1 hour so we dont hit the API on every page load
