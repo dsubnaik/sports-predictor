@@ -68,4 +68,7 @@ def train_model(df):
 
 if __name__ == "__main__":
     df = prepare_data(2026)
+    print(f"Rows: {len(df)}")
+    print(f"Pitchers: {df['pitcher'].nunique()}")
+    print(df.groupby('pitcher').size().describe())
     train_model(df)
