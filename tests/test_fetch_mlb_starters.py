@@ -1,3 +1,5 @@
+"""Tests for MLB starting-pitcher identification and extraction."""
+
 from data.fetch_mlb_starters import (
     extract_game_starters,
     find_starting_pitcher,

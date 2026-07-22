@@ -1,3 +1,5 @@
+"""Fetch completed MLB games and identify each team's official starting pitcher."""
+
 import json
 from urllib.parse import urlencode
 from urllib.request import urlopen
