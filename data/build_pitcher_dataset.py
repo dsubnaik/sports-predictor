@@ -27,6 +27,7 @@ from pybaseball import statcast
 
 from data.fetch_statcast import aggregate_to_starts
 from features.engineer import rolling_features
+from data.fetch_mlb_starters import fetch_mlb_starters
 
 # Season used to build the training dataset.
 SEASON = 2026
@@ -137,18 +138,86 @@ def summarize_pitchers(pitch_data: pd.DataFrame) -> pd.DataFrame:
 
     return pitcher_summary
 
+def filter_to_official_starts(
+    pitch_data: pd.DataFrame,
+    starters: list[dict],
+) -> pd.DataFrame:
+    """
+    Keep only Statcast pitches thrown by each game's official starters.
+
+    A row is retained only when both its game ID and pitcher ID match
+    an official starter record.
+
+    Parameters:
+        pitch_data:
+            Pitch-level Statcast data.
+
+        starters:
+            Official starter records returned by fetch_mlb_starters().
+
+    Returns:
+        A DataFrame containing pitches from official starts only.
+    """
+
+    required_columns = {"game_pk", "pitcher"}
+    missing_columns = required_columns.difference(pitch_data.columns)
+
+    if missing_columns:
+        raise ValueError(
+            "Statcast data is missing required columns: "
+            f"{sorted(missing_columns)}"
+        )
+
+    starter_frame = pd.DataFrame(starters)
+
+    if starter_frame.empty:
+        raise ValueError("No official starter records were provided.")
+
+    starter_keys = starter_frame[
+        ["game_pk", "pitcher_id"]
+    ].drop_duplicates()
+
+    starter_pitches = pitch_data.merge(
+        starter_keys,
+        left_on=["game_pk", "pitcher"],
+        right_on=["game_pk", "pitcher_id"],
+        how="inner",
+        validate="many_to_one",
+    )
+
+    starter_pitches = starter_pitches.drop(
+        columns="pitcher_id"
+    )
+
+    return starter_pitches
+
 if __name__ == "__main__":
     season_pitch_data = fetch_current_season_statcast(
         start_date=START_DATE,
         end_date=END_DATE,
     )
 
-    pitchers = summarize_pitchers(season_pitch_data)
+    official_starters = fetch_mlb_starters(
+        start_date=START_DATE,
+        end_date=END_DATE,
+    )
 
-    print("\nPitchers discovered:")
+    starter_pitch_data = filter_to_official_starts(
+        pitch_data=season_pitch_data,
+        starters=official_starters,
+    )
+
+    print(
+        f"Kept {len(starter_pitch_data):,} pitches from "
+        f"{len(official_starters):,} official starts."
+    )
+
+    pitchers = summarize_pitchers(starter_pitch_data)
+
+    print("\nStarting pitchers discovered:")
     print(pitchers.head(20).to_string(index=False))
 
     print(
-        f"\nTotal unique pitchers discovered: "
+        f"\nTotal unique starting pitchers discovered: "
         f"{len(pitchers):,}"
     )
