@@ -1,17 +1,22 @@
+"""Prediction helpers for the saved pitcher strikeout model."""
+
 import pandas as pd
 import joblib
-import sys
-sys.path.append('.')
-from data.fetch_statcast import fetch_pitcher_statcast, aggregate_to_starts
-from features.engineer import rolling_features
 
-#load the saved model
+
 def load_model():
+    """Load the trained XGBoost model from the ignored models directory."""
     return joblib.load('models/xgb_model.joblib')
 
-def predict_strikeouts(rolling_k, rolling_swstr, rolling_velocity, rolling_pitches):
 
-    model=load_model()
+def predict_strikeouts(rolling_k, rolling_swstr, rolling_velocity, rolling_pitches):
+    """Predict strikeouts from the four rolling features used at training time.
+
+    The DataFrame column names and order mirror the training feature set. Keep
+    these aligned with model/train.py unless the model is retrained.
+    """
+
+    model = load_model()
 
     df = pd.DataFrame({
         'rolling_k': [rolling_k],
@@ -19,8 +24,9 @@ def predict_strikeouts(rolling_k, rolling_swstr, rolling_velocity, rolling_pitch
         'rolling_velocity': [rolling_velocity],
         'rolling_pitches': [rolling_pitches]
         })
-    
+
     return model.predict(df)[0]
+
 
 if __name__ == "__main__":
     prediction = predict_strikeouts(

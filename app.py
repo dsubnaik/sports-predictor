@@ -1,10 +1,15 @@
-import streamlit as st
+"""Show MLB pitcher strikeout props beside saved-model projections."""
+
 import sys
+
+import streamlit as st
+
 sys.path.append('.')
+
 from data.fetch_statcast import fetch_pitcher_statcast, aggregate_to_starts
 from features.engineer import rolling_features
 from model.predict import predict_strikeouts
-from odds.fetch_lines import parse_lines 
+from odds.fetch_lines import parse_lines
 from odds.fetch_lines import fetch_strikeout_lines
 
 st.set_page_config(page_title = "Sports Predictor", layout = "wide")
@@ -12,16 +17,24 @@ st.title("Gain an Edge")
 st.subheader("MLB Pitcher Strikeout Projections")
 search = st.text_input("Search Pitcher...")
 
-# cache lines for 1 hour so we dont hit the API on every page load
+
 @st.cache_data(ttl=3600)
 def load_lines():
+    """Fetch and parse sportsbook lines, cached to protect API credits."""
     return parse_lines(fetch_strikeout_lines())
 
 lines = load_lines()
 
-# cache each pitcher's stats so we only pull Statcast data once per day
+
 @st.cache_data(ttl=86400)
 def get_pitcher_projection(pitcher_name):
+    """Return the latest saved-model strikeout projection for one pitcher.
+
+    This live app path still builds rolling features from an individual
+    pitcher's Statcast history. Missing player IDs, empty Statcast responses,
+    and unexpected API payloads are treated as unavailable projections so the
+    Streamlit page can continue rendering the remaining lines.
+    """
     try:
         from data.fetch_statcast import get_player_id
         player_id = get_player_id(pitcher_name)
@@ -41,10 +54,10 @@ def get_pitcher_projection(pitcher_name):
     except:
         return None
 
+
 if search:
     lines = [line for line in lines if search.lower() in line['pitcher'].lower()]
 
-# display a card for each pitcher with their line and projection
 for line in lines:
     with st.container(border=True):
         with st.spinner(f"Loading {line['pitcher']}..."):

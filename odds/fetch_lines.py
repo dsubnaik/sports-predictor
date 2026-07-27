@@ -1,23 +1,30 @@
-import requests
+"""Fetch and normalize MLB pitcher strikeout lines from The Odds API."""
+
 import os
+
+import requests
 from dotenv import load_dotenv
 
-# load environment variables from .env file so API key is never hardcoded
 load_dotenv()
 API_KEY = os.getenv('ODDS_API_KEY')
 
-# step 1: get all MLB event IDs for today
+
 def get_event_ids():
-    
+    """Return the MLB events available from The Odds API for the current day."""
+
     url = 'https://api.the-odds-api.com/v4/sports/baseball_mlb/events'
     params = {'apiKey': API_KEY}
     response = requests.get(url, params=params)
     return response.json()
 
-# step 2: for each event, fetch pitcher strikeout props
-# limited to first 3 events to save API credits (500/month on free tier)
+
 def fetch_strikeout_lines():
-    
+    """Fetch pitcher strikeout prop markets for each listed MLB event.
+
+    This function returns the raw API payloads. parse_lines() owns the narrowing
+    from nested bookmaker/market data into the app's display format.
+    """
+
     events = get_event_ids()
     results = []
     for event in events:
@@ -33,11 +40,15 @@ def fetch_strikeout_lines():
         results.append(response.json())
     return results
 
-# step 3: parse the raw nested API response into a clean list
-# skips games with no bookmaker data
-# extracts pitcher name, line, and matchup from the first available bookmaker
+
 def parse_lines(results):
-    
+    """Convert raw odds responses into pitcher, line, and matchup records.
+
+    The app currently uses the first bookmaker and first outcome available for a
+    game. Games without bookmaker data are skipped because there is no line to
+    compare against the model projection.
+    """
+
     lines = []
     for event in results:
         if len(event['bookmakers']) == 0:
@@ -50,6 +61,7 @@ def parse_lines(results):
             'game': event['away_team'] + ' @ ' + event['home_team']
         })
     return lines
+
 
 if __name__ == "__main__":
     results = fetch_strikeout_lines()

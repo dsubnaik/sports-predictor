@@ -1,23 +1,4 @@
-"""
-File: data/build_pitcher_dataset.py
-
-Purpose:
-    Builds the current-season dataset used to train the MLB pitcher
-    strikeout prediction model.
-
-Main responsibilities:
-    - Download current-season Statcast data.
-    - Identify every pitcher who has appeared during the season.
-    - Keep actual starting-pitcher appearances only.
-    - Convert pitch-level data into one row per start.
-    - Create pitcher-specific rolling features.
-    - Preserve pitchers with limited current-season history.
-    - Save the completed dataset as a CSV file.
-
-Current development stage:
-    Retrieve current-season Statcast data and identify pitchers
-    automatically without requiring a minimum number of starts.
-"""
+"""Build and validate the current-season official-starter pitch dataset."""
 
 from datetime import date
 from pathlib import Path
@@ -26,7 +7,6 @@ import pandas as pd
 from pybaseball import statcast
 
 from data.fetch_statcast import aggregate_to_starts
-from features.engineer import rolling_features
 from data.fetch_mlb_starters import fetch_mlb_starters
 
 # Season used to build the training dataset.
@@ -42,23 +22,12 @@ END_DATE = date.today().isoformat()
 # Location where the completed dataset will be saved.
 OUTPUT_PATH = Path("data/processed/pitcher_training_2026.csv")
 
+
 def fetch_current_season_statcast(
     start_date: str,
     end_date: str,
 ) -> pd.DataFrame:
-    """
-    Download all MLB Statcast pitches within the selected date range.
-
-    Parameters:
-        start_date:
-            First date to include, formatted as YYYY-MM-DD.
-
-        end_date:
-            Last date to include, formatted as YYYY-MM-DD.
-
-    Returns:
-        A DataFrame containing one row per recorded pitch.
-    """
+    """Download all MLB Statcast pitches within the selected date range."""
 
     print(
         f"Downloading MLB Statcast data from "
@@ -79,20 +48,12 @@ def fetch_current_season_statcast(
 
     return pitch_data
 
+
 def summarize_pitchers(pitch_data: pd.DataFrame) -> pd.DataFrame:
-    """
-    Create a summary of every pitcher found in the Statcast data.
+    """Summarize every pitcher found in the filtered Statcast data.
 
     This does not exclude pitchers based on innings or appearances.
     New and recently debuted pitchers therefore remain available.
-
-    Parameters:
-        pitch_data:
-            Pitch-level Statcast DataFrame.
-
-    Returns:
-        A DataFrame containing each pitcher's ID, name, pitch count,
-        game count, and first and most recent appearance dates.
     """
 
     required_columns = {
@@ -138,25 +99,15 @@ def summarize_pitchers(pitch_data: pd.DataFrame) -> pd.DataFrame:
 
     return pitcher_summary
 
+
 def filter_to_official_starts(
     pitch_data: pd.DataFrame,
     starters: list[dict],
 ) -> pd.DataFrame:
-    """
-    Keep only Statcast pitches thrown by each game's official starters.
+    """Keep only Statcast pitches thrown by each game's official starters.
 
     A row is retained only when both its game ID and pitcher ID match
     an official starter record.
-
-    Parameters:
-        pitch_data:
-            Pitch-level Statcast data.
-
-        starters:
-            Official starter records returned by fetch_mlb_starters().
-
-    Returns:
-        A DataFrame containing pitches from official starts only.
     """
 
     required_columns = {"game_pk", "pitcher"}
@@ -173,6 +124,8 @@ def filter_to_official_starts(
     if starter_frame.empty:
         raise ValueError("No official starter records were provided.")
 
+    # Matching on both game_pk and pitcher_id prevents the home and away
+    # starters in the same game from being collapsed together.
     starter_keys = starter_frame[
         ["game_pk", "pitcher_id"]
     ].drop_duplicates()
@@ -190,6 +143,7 @@ def filter_to_official_starts(
     )
 
     return starter_pitches
+
 
 if __name__ == "__main__":
     season_pitch_data = fetch_current_season_statcast(
@@ -222,6 +176,8 @@ if __name__ == "__main__":
         )
     ]
 
+    # These diagnostics protect the official-starter matching assumptions before
+    # any future feature-building step consumes the dataset.
     print(
         f"\nOfficial starter records: "
         f"{len(official_starter_frame):,}"
@@ -261,6 +217,8 @@ if __name__ == "__main__":
         unmatched_starts["_merge"] == "left_only"
     ].drop(columns="_merge")
 
+    # Unmatched starts usually indicate a schedule/boxscore record that did not
+    # line up with Statcast pitch rows, so they are surfaced instead of hidden.
     print(
         f"\nOfficial starts without matching Statcast pitches: "
         f"{len(unmatched_starts):,}"
