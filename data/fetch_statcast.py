@@ -13,9 +13,8 @@ Main responsibilities:
     - Calculate strikeouts, swinging-strike rate, velocity, and spin rate.
 
 Important note:
-    The current aggregation creates one row per pitching appearance.
-    It does not yet guarantee that every appearance was a start.
-    Filtering out relief appearances will be added next.
+    The aggregation expects pitch data that has already been filtered to
+    official starting-pitcher appearances.
 """
 
 import pandas as pd
@@ -58,7 +57,7 @@ def fetch_pitcher_statcast(player_id, start_date, end_date):
 
 def aggregate_to_starts(df):
     """
-    Convert pitch-level Statcast data into one row per game.
+    Convert official-starter Statcast pitches into one row per pitcher start.
 
     Each row contains summary statistics for one pitcher's
     appearance in a game.
@@ -92,37 +91,13 @@ def aggregate_to_starts(df):
             "Cannot aggregate Statcast data because the DataFrame is empty."
         )
 
-    # Identify games in which the pitcher appeared during the first inning.
-    #
-    # A normal starting pitcher begins the game in inning 1.
-    # Relief appearances beginning in later innings will be excluded.
-    starter_game_ids = (
-        df.loc[df["inning"] == 1, "game_pk"]
-        .dropna()
-        .unique()
-    )
-
-    # Keep only pitches from games identified as starts.
-    df = df[df["game_pk"].isin(starter_game_ids)].copy()
-
-    # Stop with a clear error if no starts were found.
-    if df.empty:
-        raise ValueError(
-            "No starting-pitcher appearances were found in the selected date range."
-        )
-    # Create one summary row for each game.
+    # Create one summary row for each pitcher start.
     #
     # game_pk is MLB's unique ID for a game.
-    # Grouping by game_pk combines every pitch from the same game.
-    agg = df.groupby("game_pk").agg(
+    # Grouping by both game and pitcher keeps opposing starters separate.
+    agg = df.groupby(["game_pk", "pitcher"]).agg(
         # Keep the date of the game.
         game_date=("game_date", "first"),
-
-        # Keep the pitcher's MLB player ID.
-        #
-        # This is required when combining several pitchers because
-        # rolling features must be calculated separately for each one.
-        pitcher_id=("pitcher", "first"),
 
         # Keep the pitcher's displayed name.
         pitcher_name=("player_name", "first"),
@@ -166,6 +141,9 @@ def aggregate_to_starts(df):
         # Calculate the average spin rate of all recorded pitches.
         avg_spin_rate=("release_spin_rate", "mean"),
     ).reset_index()
+
+    # Give the grouped pitcher ID the name expected by later features.
+    agg = agg.rename(columns={"pitcher": "pitcher_id"})
 
     # Swinging-strike rate is the number of swinging strikes
     # divided by the total number of pitches.

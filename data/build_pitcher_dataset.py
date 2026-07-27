@@ -207,9 +207,76 @@ if __name__ == "__main__":
         starters=official_starters,
     )
 
+    start_data = aggregate_to_starts(starter_pitch_data)
+
+    official_starter_frame = pd.DataFrame(official_starters)
+
+    official_start_keys = official_starter_frame[
+        ["game_pk", "pitcher_id"]
+    ].drop_duplicates()
+
+    duplicate_starts = official_starter_frame[
+        official_starter_frame.duplicated(
+            subset=["game_pk", "pitcher_id"],
+            keep=False,
+        )
+    ]
+
+    print(
+        f"\nOfficial starter records: "
+        f"{len(official_starter_frame):,}"
+    )
+
+    print(
+        f"Unique official starter-game pairs: "
+        f"{len(official_start_keys):,}"
+    )
+
+    print(
+        f"Duplicate official starter records: "
+        f"{len(duplicate_starts):,}"
+    )
+
+    if not duplicate_starts.empty:
+        print(duplicate_starts.to_string(index=False))
+
+    unique_official_starters = (
+        official_starter_frame.drop_duplicates(
+            subset=["game_pk", "pitcher_id"]
+        )
+    )
+
+    matched_start_keys = start_data[
+        ["game_pk", "pitcher_id"]
+    ].drop_duplicates()
+
+    unmatched_starts = unique_official_starters.merge(
+        matched_start_keys,
+        on=["game_pk", "pitcher_id"],
+        how="left",
+        indicator=True,
+    )
+
+    unmatched_starts = unmatched_starts[
+        unmatched_starts["_merge"] == "left_only"
+    ].drop(columns="_merge")
+
+    print(
+        f"\nOfficial starts without matching Statcast pitches: "
+        f"{len(unmatched_starts):,}"
+    )
+
+    if not unmatched_starts.empty:
+        print(unmatched_starts.to_string(index=False))
+
+    print(
+        f"\nAggregated the filtered pitches into "
+        f"{len(start_data):,} starter-game rows."
+    )
+
     print(
         f"Kept {len(starter_pitch_data):,} pitches from "
-        f"{len(official_starters):,} official starts."
+        f"{len(official_start_keys):,} unique official starts."
     )
 
     pitchers = summarize_pitchers(starter_pitch_data)
