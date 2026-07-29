@@ -1,51 +1,12 @@
-"""
-File: data/fetch_statcast.py
-
-Purpose:
-    Downloads pitch-level Statcast data for MLB pitchers and converts
-    that data into one row per pitching appearance.
-
-Main responsibilities:
-    - Download every pitch thrown by a selected pitcher.
-    - Look up a pitcher's MLB player ID by name.
-    - Aggregate pitch-level data into game-level statistics.
-    - Preserve the pitcher ID for multi-pitcher feature engineering.
-    - Calculate strikeouts, swinging-strike rate, velocity, and spin rate.
-
-Important note:
-    The aggregation expects pitch data that has already been filtered to
-    official starting-pitcher appearances.
-"""
+"""Fetch pitcher Statcast data and aggregate it into start-level rows."""
 
 import pandas as pd
 from pybaseball import playerid_lookup, statcast_pitcher
 
 
 def fetch_pitcher_statcast(player_id, start_date, end_date):
-    """
-    Download pitch-level Statcast data for one pitcher.
+    """Download pitch-level Statcast data for one pitcher and date range."""
 
-    Parameters:
-        player_id:
-            MLB's internal player ID.
-
-            Example:
-                Sonny Gray's MLB ID is 543243.
-
-        start_date:
-            Beginning of the requested date range.
-            Must use the format YYYY-MM-DD.
-
-        end_date:
-            End of the requested date range.
-            Must use the format YYYY-MM-DD.
-
-    Returns:
-        A pandas DataFrame where each row represents one pitch.
-    """
-
-    # Download every recorded pitch thrown by the pitcher
-    # between the selected start and end dates.
     df = statcast_pitcher(
         start_date,
         end_date,
@@ -56,69 +17,28 @@ def fetch_pitcher_statcast(player_id, start_date, end_date):
 
 
 def aggregate_to_starts(df):
-    """
-    Convert official-starter Statcast pitches into one row per pitcher start.
+    """Convert official-starter pitch rows into one row per pitcher start.
 
-    Each row contains summary statistics for one pitcher's
-    appearance in a game.
-
-    Required input columns:
-        game_pk
-        game_date
-        pitcher
-        player_name
-        events
-        description
-        release_speed
-        release_spin_rate
-
-    Returned columns:
-        game_pk
-        game_date
-        pitcher_id
-        pitcher_name
-        strikeouts
-        swinging_strikes
-        total_pitches
-        avg_velocity
-        avg_spin_rate
-        swstr_pct
+    The input should already be limited to official starters. Grouping by both
+    game_pk and pitcher keeps the two starters in the same game separate.
     """
 
-    # Stop early when no Statcast data was returned.
     if df.empty:
         raise ValueError(
             "Cannot aggregate Statcast data because the DataFrame is empty."
         )
 
-    # Create one summary row for each pitcher start.
-    #
-    # game_pk is MLB's unique ID for a game.
-    # Grouping by both game and pitcher keeps opposing starters separate.
     agg = df.groupby(["game_pk", "pitcher"]).agg(
-        # Keep the date of the game.
         game_date=("game_date", "first"),
-
-        # Keep the pitcher's displayed name.
         pitcher_name=("player_name", "first"),
-
-        # Count strikeouts.
-        #
-        # The events column is normally only populated on the pitch
-        # that ends a plate appearance.
+        # Statcast records strikeout events on the pitch ending the plate
+        # appearance, not on every pitch in the at-bat.
         strikeouts=(
             "events",
             lambda values: (values == "strikeout").sum(),
         ),
-
-        # Count pitches recorded as swinging strikes.
-        #
-        # swinging_strike:
-        #     The batter swung and missed normally.
-        #
-        # swinging_strike_blocked:
-        #     The batter swung and missed, but the catcher blocked
-        #     the pitch in the dirt.
+        # Blocked swinging strikes still reflect a whiff and belong in
+        # swinging-strike rate.
         swinging_strikes=(
             "description",
             lambda values: values.isin(
@@ -128,68 +48,29 @@ def aggregate_to_starts(df):
                 ]
             ).sum(),
         ),
-
-        # Count the number of pitches with a recorded release speed.
-        #
-        # Most Statcast pitches include release_speed, so this acts
-        # as the pitch count for the appearance.
         total_pitches=("release_speed", "count"),
-
-        # Calculate the average velocity of all recorded pitches.
         avg_velocity=("release_speed", "mean"),
-
-        # Calculate the average spin rate of all recorded pitches.
         avg_spin_rate=("release_spin_rate", "mean"),
     ).reset_index()
 
-    # Give the grouped pitcher ID the name expected by later features.
     agg = agg.rename(columns={"pitcher": "pitcher_id"})
-
-    # Swinging-strike rate is the number of swinging strikes
-    # divided by the total number of pitches.
     agg["swstr_pct"] = (
         agg["swinging_strikes"] / agg["total_pitches"]
     )
 
-    # Convert game_date into pandas datetime values.
-    # This allows correct chronological sorting later.
+    # Later rolling features depend on starts being chronologically ordered.
     agg["game_date"] = pd.to_datetime(agg["game_date"])
-
-    # Sort the appearances from oldest to newest.
     agg = agg.sort_values("game_date").reset_index(drop=True)
 
     return agg
 
 
 def get_player_id(player_name):
-    """
-    Look up a player's MLB ID using their full name.
+    """Look up the MLBAM player ID for a full player name."""
 
-    Parameters:
-        player_name:
-            Player name written as:
-                FirstName LastName
-
-            Examples:
-                Aaron Nola
-                Sonny Gray
-                Luis Garcia Jr
-
-    Returns:
-        The MLBAM player ID from the first matching result.
-    """
-
-    # Split the name only at the first space.
-    #
-    # Example:
-    #     "Luis Garcia Jr"
-    #
-    # Becomes:
-    #     first = "Luis"
-    #     last = "Garcia Jr"
+    # Split once so suffixes such as "Jr" remain part of the last-name lookup.
     name_parts = player_name.strip().split(" ", 1)
 
-    # A full name must contain at least a first and last name.
     if len(name_parts) != 2:
         raise ValueError(
             "Player name must include both a first and last name."
@@ -198,32 +79,20 @@ def get_player_id(player_name):
     first_name = name_parts[0]
     last_name = name_parts[1]
 
-    # Search pybaseball's player database.
     result = playerid_lookup(
         last_name,
         first_name,
     )
 
-    # Raise a clear error when no matching player is found.
     if result.empty:
         raise ValueError(
             f"No MLB player was found with the name '{player_name}'."
         )
 
-    # Return the MLBAM ID from the first matching result.
     return int(result["key_mlbam"].iloc[0])
 
 
 if __name__ == "__main__":
-    """
-    Run a simple lookup test when this file is executed directly.
-
-    Command:
-        python data/fetch_statcast.py
-    """
-
     test_player_name = "Aaron Nola"
-
     player_id = get_player_id(test_player_name)
-
     print(f"{test_player_name}'s MLB player ID is {player_id}.")

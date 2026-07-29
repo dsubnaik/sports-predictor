@@ -1,10 +1,11 @@
 """Tests for MLB starting-pitcher identification and extraction."""
 
+import pytest
+
 from data.fetch_mlb_starters import (
     extract_game_starters,
     find_starting_pitcher,
 )
-import pytest
 
 
 def test_find_starting_pitcher():
@@ -37,6 +38,7 @@ def test_find_starting_pitcher():
         "pitcher_name": "Starting Pitcher",
     }
 
+
 def test_find_starting_pitcher_raises_when_no_starter_exists():
     team_boxscore = {
         "pitchers": [100, 200],
@@ -54,6 +56,7 @@ def test_find_starting_pitcher_raises_when_no_starter_exists():
 
     with pytest.raises(ValueError, match="No starting pitcher found"):
         find_starting_pitcher(team_boxscore)
+
 
 def test_extract_game_starters():
     game = {
