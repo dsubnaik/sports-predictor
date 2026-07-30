@@ -8,6 +8,7 @@ from pybaseball import statcast
 
 from data.fetch_statcast import aggregate_to_starts
 from data.fetch_mlb_starters import fetch_mlb_starters
+from features.engineer import rolling_features
 
 # Season used to build the training dataset.
 SEASON = 2026
@@ -245,4 +246,43 @@ if __name__ == "__main__":
     print(
         f"\nTotal unique starting pitchers discovered: "
         f"{len(pitchers):,}"
+    )
+
+    feature_data = rolling_features(start_data)
+
+    rolling_columns = [
+        "rolling_k",
+        "rolling_swstr",
+        "rolling_velocity",
+        "rolling_pitches",
+    ]
+
+    model_data = feature_data.dropna(
+        subset=rolling_columns
+    ).copy()
+
+    OUTPUT_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    model_data.to_csv(
+        OUTPUT_PATH,
+        index=False,
+    )
+
+    print(
+        f"\nCreated rolling features for "
+        f"{len(feature_data):,} starter-game rows."
+    )
+
+    print(
+        f"Removed "
+        f"{len(feature_data) - len(model_data):,} rows "
+        f"without five previous starts."
+    )
+
+    print(
+        f"Saved {len(model_data):,} model-ready rows to "
+        f"{OUTPUT_PATH}."
     )
