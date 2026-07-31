@@ -1,12 +1,21 @@
+# Virtual environment
 venv/
+
+# Python cache
 **/__pycache__/
 *.pyc
 
-#Environment
+# Environment variables
 .env
 
-# Generated Data
+# Generated datasets
 data/processed/
 
-# Trained Models
+# Trained models
 models/
+
+# Pytest cache
+.pytest_cache/
+
+# Jupyter notebooks (optional, if you use them)
+.ipynb_checkpoints/
