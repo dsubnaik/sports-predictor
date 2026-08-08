@@ -62,6 +62,10 @@ def test_extract_game_starters():
     game = {
         "game_pk": 123456,
         "game_date": "2026-04-01",
+        "away_team_id": 10,
+        "away_team_name": "Away Team",
+        "home_team_id": 20,
+        "home_team_name": "Home Team",
     }
 
     boxscore = {
@@ -96,6 +100,10 @@ def test_extract_game_starters():
             "pitcher_id": 100,
             "pitcher_name": "Away Starter",
             "home_away": "away",
+            "team_id": 10,
+            "team_name": "Away Team",
+            "opponent_id": 20,
+            "opponent_name": "Home Team",
         },
         {
             "game_pk": 123456,
@@ -103,5 +111,9 @@ def test_extract_game_starters():
             "pitcher_id": 200,
             "pitcher_name": "Home Starter",
             "home_away": "home",
+            "team_id": 20,
+            "team_name": "Home Team",
+            "opponent_id": 10,
+            "opponent_name": "Away Team",
         },
     ]

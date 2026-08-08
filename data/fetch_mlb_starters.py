@@ -9,6 +9,7 @@ import json
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
+
 SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
 BOXSCORE_URL = "https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore"
 
@@ -36,6 +37,10 @@ def fetch_completed_games(start_date: str, end_date: str) -> list[dict]:
                     {
                         "game_pk": game["gamePk"],
                         "game_date": game["officialDate"],
+                        "away_team_id": game["teams"]["away"]["team"]["id"],
+                        "away_team_name": game["teams"]["away"]["team"]["name"],
+                        "home_team_id": game["teams"]["home"]["team"]["id"],
+                        "home_team_name": game["teams"]["home"]["team"]["name"],
                     }
                 )
 
@@ -81,6 +86,17 @@ def extract_game_starters(game: dict, boxscore: dict) -> list[dict]:
         team_boxscore = boxscore["teams"][home_away]
         starter = find_starting_pitcher(team_boxscore)
 
+        if home_away == "away":
+            team_id = game["away_team_id"]
+            team_name = game["away_team_name"]
+            opponent_id = game["home_team_id"]
+            opponent_name = game["home_team_name"]
+        else:
+            team_id = game["home_team_id"]
+            team_name = game["home_team_name"]
+            opponent_id = game["away_team_id"]
+            opponent_name = game["away_team_name"]
+
         starters.append(
             {
                 "game_pk": game["game_pk"],
@@ -88,6 +104,10 @@ def extract_game_starters(game: dict, boxscore: dict) -> list[dict]:
                 "pitcher_id": starter["pitcher_id"],
                 "pitcher_name": starter["pitcher_name"],
                 "home_away": home_away,
+                "team_id": team_id,
+                "team_name": team_name,
+                "opponent_id": opponent_id,
+                "opponent_name": opponent_name,
             }
         )
 
@@ -105,3 +125,19 @@ def fetch_mlb_starters(start_date: str, end_date: str) -> list[dict]:
         all_starters.extend(game_starters)
 
     return all_starters
+
+
+if __name__ == "__main__":
+    starters = fetch_mlb_starters(
+        start_date="2026-08-01",
+        end_date="2026-08-01",
+    )
+
+    print(f"\nFound {len(starters)} starters:\n")
+
+    for starter in starters:
+        print(
+            f"{starter['pitcher_name']} | "
+            f"{starter['team_name']} vs {starter['opponent_name']} | "
+            f"{starter['home_away']}"
+        )
