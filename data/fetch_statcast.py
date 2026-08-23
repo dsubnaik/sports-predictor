@@ -31,6 +31,11 @@ def aggregate_to_starts(df):
     agg = df.groupby(["game_pk", "pitcher"]).agg(
         game_date=("game_date", "first"),
         pitcher_name=("player_name", "first"),
+        home_away=("home_away", "first"),
+        team_id=("team_id", "first"),
+        team_name=("team_name", "first"),
+        opponent_id=("opponent_id", "first"),
+        opponent_name=("opponent_name", "first"),
         # Statcast records strikeout events on the pitch ending the plate
         # appearance, not on every pitch in the at-bat.
         strikeouts=(

@@ -26,6 +26,10 @@ def test_filter_to_official_starts():
             "pitcher_id": 100,
             "pitcher_name": "Official Starter",
             "home_away": "away",
+            "team_id": 10,
+            "team_name": "Away Team",
+            "opponent_id": 20,
+            "opponent_name": "Home Team",
         }
     ]
 

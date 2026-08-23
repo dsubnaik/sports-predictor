@@ -8,7 +8,11 @@ from pybaseball import statcast
 
 from data.fetch_statcast import aggregate_to_starts
 from data.fetch_mlb_starters import fetch_mlb_starters
-from features.engineer import rolling_features
+from features.engineer import (
+    add_opponent_k_rate,
+    build_team_k_history,
+    rolling_features,
+)
 
 # Season used to build the training dataset.
 SEASON = 2026
@@ -128,8 +132,19 @@ def filter_to_official_starts(
     # Matching on both game_pk and pitcher_id prevents the home and away
     # starters in the same game from being collapsed together.
     starter_keys = starter_frame[
-        ["game_pk", "pitcher_id"]
-    ].drop_duplicates()
+        [
+            "game_pk",
+            "pitcher_id",
+            "home_away",
+            "team_id",
+            "team_name",
+            "opponent_id",
+            "opponent_name",
+        ]    
+    ].drop_duplicates(
+        subset=["game_pk", "pitcher_id"]
+    )
+       
 
     starter_pitches = pitch_data.merge(
         starter_keys,
@@ -163,6 +178,16 @@ if __name__ == "__main__":
     )
 
     start_data = aggregate_to_starts(starter_pitch_data)
+
+    team_k_history = build_team_k_history(
+    pitch_data=season_pitch_data,
+    starters=official_starters,
+    )
+
+    start_data = add_opponent_k_rate(
+        start_data=start_data,
+        team_k_history=team_k_history,
+    )
 
     official_starter_frame = pd.DataFrame(official_starters)
 
@@ -250,15 +275,16 @@ if __name__ == "__main__":
 
     feature_data = rolling_features(start_data)
 
-    rolling_columns = [
+    model_features = [
         "rolling_k",
         "rolling_swstr",
         "rolling_velocity",
         "rolling_pitches",
+        "opponent_k_rate",
     ]
 
     model_data = feature_data.dropna(
-        subset=rolling_columns
+        subset=model_features
     ).copy()
 
     OUTPUT_PATH.parent.mkdir(

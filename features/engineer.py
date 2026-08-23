@@ -209,8 +209,189 @@ def test_real_pitcher_data():
             ]
         ].to_string(index=False)
     )
+def build_team_k_history(
+    pitch_data: pd.DataFrame,
+    starters: list[dict],
+) -> pd.DataFrame:
+    """Calculate each team's strikeout rate using games before each date."""
 
+    starter_frame = pd.DataFrame(starters)
 
+    team_games = starter_frame[
+        [
+            "game_pk",
+            "game_date",
+            "home_away",
+            "team_id",
+        ]
+    ].drop_duplicates()
+
+    home_teams = (
+        team_games[team_games["home_away"] == "home"]
+        [["game_pk", "team_id"]]
+        .rename(columns={"team_id": "home_team_id"})
+    )
+
+    away_teams = (
+        team_games[team_games["home_away"] == "away"]
+        [["game_pk", "team_id"]]
+        .rename(columns={"team_id": "away_team_id"})
+    )
+
+    game_teams = home_teams.merge(
+        away_teams,
+        on="game_pk",
+        how="inner",
+        validate="one_to_one",
+    )
+
+    batting_data = pitch_data.merge(
+        game_teams,
+        on="game_pk",
+        how="inner",
+        validate="many_to_one",
+    )
+
+    batting_data["batting_team_id"] = batting_data[
+        "home_team_id"
+    ]
+
+    top_inning = batting_data["inning_topbot"] == "Top"
+
+    batting_data.loc[
+        top_inning,
+        "batting_team_id",
+    ] = batting_data.loc[
+        top_inning,
+        "away_team_id",
+    ]
+
+    batting_data["game_date"] = pd.to_datetime(
+        batting_data["game_date"]
+    )
+
+    plate_appearances = (
+        batting_data[
+            [
+                "game_pk",
+                "game_date",
+                "batting_team_id",
+                "at_bat_number",
+            ]
+        ]
+        .drop_duplicates()
+        .groupby(
+            [
+                "batting_team_id",
+                "game_date",
+            ]
+        )
+        .size()
+        .rename("plate_appearances")
+        .reset_index()
+    )
+
+    strikeout_events = {
+        "strikeout",
+        "strikeout_double_play",
+    }
+
+    strikeouts = (
+        batting_data[
+            batting_data["events"].isin(strikeout_events)
+        ]
+        .groupby(
+            [
+                "batting_team_id",
+                "game_date",
+            ]
+        )
+        .size()
+        .rename("strikeouts")
+        .reset_index()
+    )
+
+    daily_stats = plate_appearances.merge(
+        strikeouts,
+        on=[
+            "batting_team_id",
+            "game_date",
+        ],
+        how="left",
+    )
+
+    daily_stats["strikeouts"] = (
+        daily_stats["strikeouts"]
+        .fillna(0)
+        .astype(int)
+    )
+
+    daily_stats = daily_stats.sort_values(
+        [
+            "batting_team_id",
+            "game_date",
+        ]
+    ).reset_index(drop=True)
+
+    grouped = daily_stats.groupby(
+        "batting_team_id"
+    )
+
+    daily_stats["prior_strikeouts"] = grouped[
+        "strikeouts"
+    ].transform(
+        lambda values: values.cumsum().shift(1)
+    )
+
+    daily_stats["prior_plate_appearances"] = grouped[
+        "plate_appearances"
+    ].transform(
+        lambda values: values.cumsum().shift(1)
+    )
+
+    daily_stats["team_k_rate"] = (
+        daily_stats["prior_strikeouts"]
+        / daily_stats["prior_plate_appearances"]
+    )
+
+    return daily_stats[
+        [
+            "batting_team_id",
+            "game_date",
+            "team_k_rate",
+        ]
+    ]
+def add_opponent_k_rate(
+    start_data: pd.DataFrame,
+    team_k_history: pd.DataFrame,
+) -> pd.DataFrame:
+    """Attach the opponent's pregame strikeout rate to each pitcher start."""
+
+    result = start_data.merge(
+        team_k_history,
+        left_on=[
+            "opponent_id",
+            "game_date",
+        ],
+        right_on=[
+            "batting_team_id",
+            "game_date",
+        ],
+        how="left",
+        validate="many_to_one",
+    )
+
+    result = result.rename(
+        columns={
+            "team_k_rate": "opponent_k_rate",
+        }
+    )
+
+    result = result.drop(
+        columns="batting_team_id"
+    )
+
+    return result
 if __name__ == "__main__":
     # Run the small controlled test first.
     # This does not require downloading any baseball data.
