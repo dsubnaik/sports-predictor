@@ -10,7 +10,7 @@ from pybaseball import team_batting
 # python features/engineer.py
 sys.path.append(".")
 
-from data.fetch_statcast import aggregate_to_starts, fetch_pitcher_statcast
+from baseball.data.fetch_statcast import aggregate_to_starts, fetch_pitcher_statcast
 
 
 def rolling_features(df):

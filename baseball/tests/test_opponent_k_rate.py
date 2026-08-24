@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from features.engineer import add_opponent_k_rate
+from baseball.features.engineer import add_opponent_k_rate
 
 
 def test_add_opponent_k_rate_matches_correct_opponent():

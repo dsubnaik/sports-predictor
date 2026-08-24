@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from data.fetch_statcast import aggregate_to_starts
+from baseball.data.fetch_statcast import aggregate_to_starts
 
 
 def test_aggregate_to_starts_keeps_two_starters_in_same_game_separate():

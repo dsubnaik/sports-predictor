@@ -6,11 +6,11 @@ import streamlit as st
 
 sys.path.append('.')
 
-from data.fetch_statcast import fetch_pitcher_statcast, aggregate_to_starts
-from features.engineer import rolling_features
-from model.predict import predict_strikeouts
-from odds.fetch_lines import parse_lines
-from odds.fetch_lines import fetch_strikeout_lines
+from baseball.data.fetch_statcast import fetch_pitcher_statcast, aggregate_to_starts
+from baseball.features.engineer import rolling_features
+from baseball.model.predict import predict_strikeouts
+from baseball.odds.fetch_lines import parse_lines
+from baseball.odds.fetch_lines import fetch_strikeout_lines
 
 st.set_page_config(page_title = "Sports Predictor", layout = "wide")
 st.title("Gain an Edge")
@@ -36,7 +36,7 @@ def get_pitcher_projection(pitcher_name):
     Streamlit page can continue rendering the remaining lines.
     """
     try:
-        from data.fetch_statcast import get_player_id
+        from baseball.data.fetch_statcast import get_player_id
         player_id = get_player_id(pitcher_name)
         df = fetch_pitcher_statcast(player_id, '2025-03-01', '2025-12-31')
         df = aggregate_to_starts(df)

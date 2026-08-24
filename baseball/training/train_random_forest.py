@@ -1,9 +1,9 @@
 import pandas as pd
 
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import RandomForestRegressor
 
-from training.evaluate import evaluate_predictions
-from training.split_data import chronological_split
+from baseball.training.evaluate import evaluate_predictions
+from baseball.training.split_data import chronological_split
 
 
 DATA_PATH = "data/processed/pitcher_training_2026.csv"
@@ -13,6 +13,7 @@ FEATURES = [
     "rolling_swstr",
     "rolling_velocity",
     "rolling_pitches",
+    "opponent_k_rate",
 ]
 
 data = pd.read_csv(DATA_PATH)
@@ -29,7 +30,8 @@ y_train = train_data["strikeouts"]
 X_validation = validation_data[FEATURES]
 y_validation = validation_data["strikeouts"]
 
-model = GradientBoostingRegressor(
+model = RandomForestRegressor(
+    n_estimators=100,
     random_state=42,
 )
 

@@ -2,7 +2,7 @@
 
 import pytest
 
-from data.fetch_mlb_starters import (
+from baseball.data.fetch_mlb_starters import (
     extract_game_starters,
     find_starting_pitcher,
 )

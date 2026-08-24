@@ -1,7 +1,7 @@
 import pandas as pd
 
-from training.evaluate import evaluate_predictions
-from training.split_data import chronological_split
+from baseball.training.evaluate import evaluate_predictions
+from baseball.training.split_data import chronological_split
 
 DATA_PATH = "data/processed/pitcher_training_2026.csv"
 

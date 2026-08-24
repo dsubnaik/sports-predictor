@@ -6,9 +6,9 @@ from pathlib import Path
 import pandas as pd
 from pybaseball import statcast
 
-from data.fetch_statcast import aggregate_to_starts
-from data.fetch_mlb_starters import fetch_mlb_starters
-from features.engineer import (
+from baseball.data.fetch_statcast import aggregate_to_starts
+from baseball.data.fetch_mlb_starters import fetch_mlb_starters
+from baseball.features.engineer import (
     add_opponent_k_rate,
     build_team_k_history,
     rolling_features,

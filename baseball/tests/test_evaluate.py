@@ -2,7 +2,7 @@ import pytest
 
 from sklearn.metrics import r2_score
 
-from training.evaluate import evaluate_predictions
+from baseball.training.evaluate import evaluate_predictions
 
 
 def test_evaluate_predictions():

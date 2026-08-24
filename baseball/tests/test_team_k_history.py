@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from features.engineer import build_team_k_history
+from baseball.features.engineer import build_team_k_history
 
 
 def test_build_team_k_history_uses_only_prior_games():

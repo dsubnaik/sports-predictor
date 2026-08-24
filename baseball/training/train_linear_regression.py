@@ -2,8 +2,8 @@ import pandas as pd
 
 from sklearn.linear_model import LinearRegression
 
-from training.evaluate import evaluate_predictions
-from training.split_data import chronological_split
+from baseball.training.evaluate import evaluate_predictions
+from baseball.training.split_data import chronological_split
 
 
 DATA_PATH = "data/processed/pitcher_training_2026.csv"
@@ -13,6 +13,7 @@ FEATURES = [
     "rolling_swstr",
     "rolling_velocity",
     "rolling_pitches",
+    "opponent_k_rate",
 ]
 
 data = pd.read_csv(DATA_PATH)

@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from data.build_pitcher_dataset import filter_to_official_starts
+from baseball.data.build_pitcher_dataset import filter_to_official_starts
 
 
 def test_filter_to_official_starts():

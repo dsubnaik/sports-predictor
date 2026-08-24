@@ -15,8 +15,8 @@ from xgboost import XGBRegressor
 
 sys.path.append('.')
 
-from data.fetch_statcast import fetch_pitcher_statcast, aggregate_to_starts
-from features.engineer import rolling_features
+from baseball.data.fetch_statcast import fetch_pitcher_statcast, aggregate_to_starts
+from baseball.features.engineer import rolling_features
 
 
 def prepare_data(year):

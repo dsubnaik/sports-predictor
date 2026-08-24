@@ -1,6 +1,6 @@
 import pandas as pd
 
-from training.split_data import chronological_split
+from baseball.training.split_data import chronological_split
 
 
 def test_chronological_split():
