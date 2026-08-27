@@ -15,6 +15,7 @@ from xgboost import XGBRegressor
 
 sys.path.append('.')
 
+from baseball.config import MODELS_DIR, XGB_MODEL_PATH
 from baseball.data.fetch_statcast import fetch_pitcher_statcast, aggregate_to_starts
 from baseball.features.engineer import rolling_features
 
@@ -78,7 +79,8 @@ def train_model(df):
     mae = mean_absolute_error(y_test, predictions)
     print(f"MAE: {mae:.2f}")
 
-    joblib.dump(model, 'models/xgb_model.joblib')
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, XGB_MODEL_PATH)
     print("Model saved.")
 
 

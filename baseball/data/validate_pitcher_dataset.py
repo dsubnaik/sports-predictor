@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pandas as pd
 
+from baseball.config import PITCHER_DATASET_PATH
 
-DATASET_PATH = Path(
-    "data/processed/pitcher_training_2026.csv"
-)
+
+DATASET_PATH = PITCHER_DATASET_PATH
 
 REQUIRED_COLUMNS = {
     "game_pk",

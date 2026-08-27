@@ -2,11 +2,12 @@ import pandas as pd
 
 from sklearn.ensemble import GradientBoostingRegressor
 
+from baseball.config import PITCHER_DATASET_PATH
 from baseball.training.evaluate import evaluate_predictions
 from baseball.training.split_data import chronological_split
 
 
-DATA_PATH = "data/processed/pitcher_training_2026.csv"
+DATA_PATH = PITCHER_DATASET_PATH
 
 FEATURES = [
     "rolling_k",

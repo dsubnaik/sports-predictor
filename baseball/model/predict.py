@@ -3,10 +3,12 @@
 import pandas as pd
 import joblib
 
+from baseball.config import XGB_MODEL_PATH
+
 
 def load_model():
     """Load the trained XGBoost model from the ignored models directory."""
-    return joblib.load('models/xgb_model.joblib')
+    return joblib.load(XGB_MODEL_PATH)
 
 
 def predict_strikeouts(rolling_k, rolling_swstr, rolling_velocity, rolling_pitches):

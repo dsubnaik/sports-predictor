@@ -9,10 +9,10 @@ venv/
 .env
 
 # Generated datasets
-data/processed/
+**/data/processed/
 
 # Trained models
-models/
+**/models/
 
 # Pytest cache
 .pytest_cache/

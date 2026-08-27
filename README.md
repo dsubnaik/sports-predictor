@@ -139,16 +139,19 @@ The test suite is run using `pytest`.
 
 ```text
 sports-predictor/
-│
-├── data/               # Data collection and processing
-├── features/           # Feature engineering
-├── model/              # Modeling utilities
-├── odds/               # Sportsbook/odds-related functionality
-├── training/           # Training, splitting, and evaluation
-├── tests/              # Automated tests
-│
-├── app.py
-└── README.md
+|
+|-- baseball/           # MLB pitcher strikeout prediction package
+|   |-- config.py       # Centralized baseball paths
+|   |-- data/           # MLB data collection and dataset construction
+|   |-- features/       # Feature engineering
+|   |-- model/          # Saved-model training and prediction helpers
+|   |-- odds/           # MLB odds and prop-line fetching
+|   |-- training/       # Training, splitting, and evaluation scripts
+|   `-- tests/          # Baseball pipeline tests
+|
+|-- football/           # Placeholder for upcoming NFL work
+|-- app.py
+`-- README.md
 ```
 
 The project structure will continue to evolve as additional models and sports are added.

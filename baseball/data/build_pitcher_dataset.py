@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 from pybaseball import statcast
 
+from baseball.config import PITCHER_DATASET_PATH
 from baseball.data.fetch_statcast import aggregate_to_starts
 from baseball.data.fetch_mlb_starters import fetch_mlb_starters
 from baseball.features.engineer import (
@@ -25,7 +26,7 @@ START_DATE = f"{SEASON}-03-20"
 END_DATE = date.today().isoformat()
 
 # Location where the completed dataset will be saved.
-OUTPUT_PATH = Path("data/processed/pitcher_training_2026.csv")
+OUTPUT_PATH = Path(PITCHER_DATASET_PATH)
 
 
 def fetch_current_season_statcast(
