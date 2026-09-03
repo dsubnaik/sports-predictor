@@ -1,0 +1,9 @@
+pandas
+numpy
+scikit-learn
+pybaseball
+streamlit
+joblib
+requests
+python-dotenv
+xgboost
