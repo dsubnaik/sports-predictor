@@ -3,6 +3,7 @@ import pytest
 
 from football.data.build_quarterback_dataset import OUTPUT_COLUMNS
 from football.data.fetch_nflverse import (
+    load_depth_charts,
     load_player_game_stats,
     load_schedules,
     normalize_quarterback_game_stats,
@@ -129,6 +130,20 @@ def test_load_schedules_passes_requested_seasons_to_loader():
         return FakePolarsFrame(schedules)
 
     result = load_schedules([2025, 2026], loader=loader)
+
+    assert calls == [{"seasons": [2025, 2026]}]
+    assert isinstance(result, pd.DataFrame)
+
+
+def test_load_depth_charts_passes_requested_seasons_to_loader():
+    calls = []
+    depth_charts = pd.DataFrame({"season": [2026], "team": ["KC"]})
+
+    def loader(**kwargs):
+        calls.append(kwargs)
+        return FakePolarsFrame(depth_charts)
+
+    result = load_depth_charts([2025, 2026], loader=loader)
 
     assert calls == [{"seasons": [2025, 2026]}]
     assert isinstance(result, pd.DataFrame)

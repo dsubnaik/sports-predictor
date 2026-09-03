@@ -87,6 +87,19 @@ def load_schedules(
     return _to_pandas(source_data)
 
 
+def load_depth_charts(
+    seasons: int | Sequence[int] | None,
+    loader: Callable[..., Any] | None = None,
+) -> pd.DataFrame:
+    """Load NFL weekly depth charts for the requested seasons."""
+
+    if loader is None:
+        loader = _load_nflreadpy().load_depth_charts
+
+    source_data = loader(seasons=seasons)
+    return _to_pandas(source_data)
+
+
 def validate_player_stats_schema(data: pd.DataFrame) -> None:
     """Validate source columns needed to normalize quarterback game rows."""
 
