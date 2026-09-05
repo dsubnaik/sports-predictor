@@ -2,7 +2,7 @@ pandas
 numpy
 scikit-learn
 pybaseball
-streamlit
+streamlit>=1.46.0
 joblib
 requests
 python-dotenv
