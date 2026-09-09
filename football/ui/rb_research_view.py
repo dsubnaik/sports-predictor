@@ -7,6 +7,11 @@ from typing import Any
 
 import pandas as pd
 
+from football.pipeline.build_weekly_player_prop_odds import (
+    WEEKLY_PLAYER_PROP_ODDS_COLUMNS,
+    WeeklyPlayerPropOddsResult,
+)
+
 
 SUMMARY_DISPLAY_COLUMNS = {
     "matchup_rank": "Defensive Matchup Rank",
@@ -85,6 +90,14 @@ DEFENSE_LOG_DISPLAY_COLUMNS = {
 }
 
 DETAIL_SORT_COLUMNS = ["season", "week", "game_id"]
+
+RUSHING_PROP_DISPLAY_COLUMNS = [
+    "Sportsbook",
+    "Rushing Yards Line",
+    "Over Price",
+    "Under Price",
+    "Market Updated",
+]
 
 
 @dataclass(frozen=True)
@@ -199,6 +212,127 @@ def prepare_defense_log_display(defense_game_log: pd.DataFrame) -> pd.DataFrame:
     return _prepare_log_display(defense_game_log, DEFENSE_LOG_DISPLAY_COLUMNS)
 
 
+def filter_selected_rb_rushing_props(
+    player_matched_odds: pd.DataFrame,
+    participant: pd.Series,
+) -> pd.DataFrame:
+    """Return matched rushing quotes for one selected RB participant-game."""
+
+    _require_player_prop_schema(player_matched_odds)
+    empty = player_matched_odds.iloc[0:0].copy(deep=True).reset_index(drop=True)
+    game_id = participant.get("game_id")
+    player_id = participant.get("player_id")
+    if _blank(game_id) or _blank(player_id):
+        return empty
+    rows = player_matched_odds.loc[
+        (player_matched_odds["market_key"] == "player_rush_yds")
+        & (player_matched_odds["event_match_status"] == "matched")
+        & (player_matched_odds["match_status"] == "matched")
+        & (player_matched_odds["nflverse_game_id"] == game_id)
+        & (player_matched_odds["player_id"] == player_id)
+    ].copy(deep=True)
+    return rows.reset_index(drop=True)
+
+
+def prepare_rushing_prop_display(props: pd.DataFrame) -> pd.DataFrame:
+    """Pivot side-level rushing quotes into deterministic sportsbook rows."""
+
+    _require_player_prop_schema(props)
+    if props.empty:
+        return pd.DataFrame(columns=RUSHING_PROP_DISPLAY_COLUMNS)
+
+    display_rows: list[dict[str, object]] = []
+    grouping_columns = ["event_id", "bookmaker_key", "player_id", "market_key", "point"]
+    for key, group in props.groupby(grouping_columns, sort=True, dropna=False):
+        _event_id, bookmaker_key, _player_id, market_key, point = key
+        if market_key != "player_rush_yds":
+            raise ValueError("Rushing-prop display requires player_rush_yds rows")
+        updates = group["market_last_update"].dropna().drop_duplicates()
+        if len(updates) > 1:
+            raise ValueError("Conflicting market update timestamps for one rushing line")
+        prices: dict[str, object] = {}
+        for side, side_rows in group.groupby("outcome_name", sort=True, dropna=False):
+            if side not in {"Over", "Under"}:
+                raise ValueError("Rushing-prop display requires Over or Under outcomes")
+            if len(side_rows) != 1:
+                raise ValueError("Duplicate sportsbook outcome for one rushing line")
+            prices[side] = side_rows.iloc[0]["price"]
+
+        title_values = group["bookmaker_title"].dropna().astype("string").str.strip()
+        title_values = title_values[title_values != ""].drop_duplicates()
+        if len(title_values) > 1:
+            raise ValueError("Conflicting bookmaker titles for one rushing line")
+        display_rows.append(
+            {
+                "Sportsbook": title_values.iloc[0] if len(title_values) else bookmaker_key,
+                "Rushing Yards Line": point,
+                "Over Price": prices.get("Over", pd.NA),
+                "Under Price": prices.get("Under", pd.NA),
+                "Market Updated": updates.iloc[0] if len(updates) else pd.NA,
+            }
+        )
+
+    return pd.DataFrame(display_rows, columns=RUSHING_PROP_DISPLAY_COLUMNS).sort_values(
+        ["Sportsbook", "Rushing Yards Line"],
+        kind="mergesort",
+        na_position="last",
+    ).reset_index(drop=True)
+
+
+def build_selected_rb_prop_warnings(
+    player_prop_odds: WeeklyPlayerPropOddsResult | None,
+    participant: pd.Series,
+    selected_props: pd.DataFrame | None = None,
+) -> list[str]:
+    """Return concise rushing-odds diagnostics for the selected participant."""
+
+    if player_prop_odds is None:
+        return ["Rushing-yard odds were not requested for this report."]
+    game_id = participant.get("game_id")
+    player_id = participant.get("player_id")
+    if _blank(player_id):
+        return ["Selected participant is unresolved, so rushing-yard lines cannot be matched."]
+    if _blank(game_id):
+        return ["Selected participant has no game identifier for rushing-yard line matching."]
+
+    odds = player_prop_odds.player_matched_odds
+    _require_player_prop_schema(odds)
+    warnings: list[str] = []
+    event_rows = _selected_event_diagnostic_rows(odds, participant)
+    if (event_rows["event_match_status"] == "unmatched").any():
+        warnings.append("A sportsbook event for this matchup could not be matched to the schedule.")
+    if (event_rows["event_match_status"] == "ambiguous").any():
+        warnings.append("A sportsbook event for this matchup matched multiple schedule games.")
+
+    player_rows = odds.loc[
+        (odds["market_key"] == "player_rush_yds")
+        & (odds["event_match_status"] == "matched")
+        & (odds["nflverse_game_id"] == game_id)
+    ]
+    if (player_rows["match_status"] == "unmatched").any():
+        warnings.append("One or more sportsbook players in this game could not be matched to nflverse.")
+    if (player_rows["match_status"] == "ambiguous").any():
+        warnings.append("One or more sportsbook players in this game have ambiguous nflverse matches.")
+
+    matched_props = selected_props
+    if matched_props is None:
+        matched_props = filter_selected_rb_rushing_props(odds, participant)
+    if matched_props.empty:
+        warnings.append("No matched rushing-yard line is available for the selected participant.")
+    elif _has_incomplete_pair(matched_props):
+        warnings.append("One or more sportsbooks have an incomplete Over/Under rushing-yard pair.")
+    return warnings
+
+
+def format_odds_retrieval_time(value: object) -> str:
+    """Format a successful UTC retrieval timestamp deterministically."""
+
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is None:
+        raise ValueError("odds retrieval time must be timezone-aware")
+    return timestamp.tz_convert("UTC").strftime("%Y-%m-%d %H:%M UTC")
+
+
 def build_warning_counts(summary: pd.DataFrame) -> dict[str, int]:
     """Return concise report-level data-quality warning counts."""
 
@@ -249,3 +383,36 @@ def _sort_details(rows: pd.DataFrame) -> pd.DataFrame:
 
 def _blank(value: Any) -> bool:
     return pd.isna(value) or (isinstance(value, str) and not value.strip())
+
+
+def _require_player_prop_schema(props: pd.DataFrame) -> None:
+    if not isinstance(props, pd.DataFrame):
+        raise TypeError("player_matched_odds must be a pandas DataFrame")
+    if props.columns.duplicated().any():
+        raise ValueError("player_matched_odds must not contain duplicate columns")
+    if props.columns.tolist() != WEEKLY_PLAYER_PROP_ODDS_COLUMNS:
+        raise ValueError(
+            "player_matched_odds columns must exactly match "
+            "WEEKLY_PLAYER_PROP_ODDS_COLUMNS in order"
+        )
+
+
+def _selected_event_diagnostic_rows(
+    odds: pd.DataFrame,
+    participant: pd.Series,
+) -> pd.DataFrame:
+    teams = {participant.get("team"), participant.get("opponent")}
+    if any(_blank(team) for team in teams):
+        return odds.iloc[0:0].copy(deep=True)
+    return odds.loc[
+        odds["nflverse_home_team"].isin(teams)
+        & odds["nflverse_away_team"].isin(teams)
+    ].copy(deep=True)
+
+
+def _has_incomplete_pair(props: pd.DataFrame) -> bool:
+    grouping_columns = ["event_id", "bookmaker_key", "player_id", "market_key", "point"]
+    return any(
+        set(group["outcome_name"]) != {"Over", "Under"}
+        for _, group in props.groupby(grouping_columns, sort=False, dropna=False)
+    )

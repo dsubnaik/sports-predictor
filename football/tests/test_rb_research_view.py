@@ -6,18 +6,26 @@ import pandas as pd
 import pytest
 
 from football.pipeline import WeeklyRBResearchResult
+from football.pipeline.build_weekly_player_prop_odds import (
+    WEEKLY_PLAYER_PROP_ODDS_COLUMNS,
+)
 from football.ui.rb_research_page import render_football_rb_research_page
 from football.ui.rb_research_view import (
     DEFENSIVE_MATCHUP_RANK_HELP,
     build_participant_options,
+    build_selected_rb_prop_warnings,
     build_warning_counts,
     default_history_season,
     filter_defense_game_log,
     filter_rb_game_log,
+    filter_selected_rb_rushing_props,
     find_participant,
+    format_odds_retrieval_time,
     prepare_defense_log_display,
     prepare_rb_log_display,
+    prepare_rushing_prop_display,
     prepare_summary_display,
+    RUSHING_PROP_DISPLAY_COLUMNS,
 )
 
 
@@ -303,8 +311,31 @@ def test_page_generates_once_and_preserves_qb_session_state():
     assert len(calls) == 1
     assert calls[0]["report_week"] == 1
     assert calls[0]["history_season"] == calls[0]["report_season"] - 1
+    assert calls[0]["include_player_props"] is True
     assert ui.session_state["football_qb_research_result"] == "qb"
     assert isinstance(ui.session_state["football_rb_research_result"], WeeklyRBResearchResult)
+    assert ui.session_state["football_rb_research_odds_retrieved_at"].tzinfo is not None
+
+
+def test_each_deliberate_generate_calls_the_rb_loader_again():
+    calls: list[dict[str, object]] = []
+    state: dict[str, object] = {}
+
+    def loader(**kwargs):
+        calls.append(kwargs)
+        return make_result()
+
+    render_football_rb_research_page(
+        streamlit_module=FakeStreamlit(submitted=True, session_state=state),
+        report_loader=loader,
+    )
+    render_football_rb_research_page(
+        streamlit_module=FakeStreamlit(submitted=True, session_state=state),
+        report_loader=loader,
+    )
+
+    assert len(calls) == 2
+    assert all(call["include_player_props"] is True for call in calls)
 
 
 def test_page_rerun_with_existing_result_does_not_reload_pipeline():
@@ -338,3 +369,134 @@ def test_page_does_not_swallow_unexpected_type_error():
             streamlit_module=ui,
             report_loader=lambda **kwargs: (_ for _ in ()).throw(TypeError("developer defect")),
         )
+
+
+def test_failed_generation_preserves_existing_rb_state_and_qb_state():
+    prior_result = make_result()
+    prior_inputs = {
+        "report_season": 2026,
+        "report_week": 1,
+        "as_of_date": pd.Timestamp("2026-09-01").date(),
+        "history_season": 2025,
+    }
+    prior_time = pd.Timestamp("2026-09-10T12:00:00Z")
+    state = {
+        "football_rb_research_inputs": prior_inputs,
+        "football_rb_research_result": prior_result,
+        "football_rb_research_odds_retrieved_at": prior_time,
+        "football_rb_research_selected_participant": "prior-option",
+        "football_qb_research_result": "qb",
+    }
+    ui = FakeStreamlit(submitted=True, session_state=state)
+
+    with pytest.raises(_StopRendering):
+        render_football_rb_research_page(
+            streamlit_module=ui,
+            report_loader=lambda **_kwargs: (_ for _ in ()).throw(ValueError("bad odds payload")),
+        )
+
+    assert ui.session_state["football_rb_research_inputs"] is prior_inputs
+    assert ui.session_state["football_rb_research_result"] is prior_result
+    assert ui.session_state["football_rb_research_odds_retrieved_at"] == prior_time
+    assert ui.session_state["football_rb_research_selected_participant"] == "prior-option"
+    assert ui.session_state["football_qb_research_result"] == "qb"
+
+
+def make_player_matched_odds(rows: list[dict[str, object]] | None = None) -> pd.DataFrame:
+    default = {
+        "event_id": "event-kc", "commence_time": "2026-09-11T00:20:00Z",
+        "home_team": "Kansas City Chiefs", "away_team": "Los Angeles Chargers",
+        "bookmaker_key": "draftkings", "bookmaker_title": "DraftKings",
+        "bookmaker_last_update": "2026-09-10T12:00:00Z",
+        "market_key": "player_rush_yds", "market_last_update": "2026-09-10T12:01:00Z",
+        "player_name": "Alex Runner", "outcome_name": "Over", "price": -110,
+        "point": 55.5, "nflverse_game_id": "2026_01_KC_LAC",
+        "nflverse_season": 2026, "nflverse_week": 1, "nflverse_home_team": "KC",
+        "nflverse_away_team": "LAC", "nflverse_kickoff_time": "2026-09-11T00:20:00Z",
+        "event_match_status": "matched", "event_match_method": "team_and_kickoff",
+        "event_match_candidate_count": 1, "event_match_note": "Matched",
+        "player_id": "id_one", "nflverse_player_name": "Alex Runner",
+        "nflverse_team": "KC", "expected_position": "RB", "match_status": "matched",
+        "match_method": "canonical_name_and_position", "match_candidate_count": 1,
+        "match_note": "Matched",
+    }
+    return pd.DataFrame(
+        [{**default, **row} for row in (rows or [{}, {"outcome_name": "Under", "price": -115}])],
+        columns=WEEKLY_PLAYER_PROP_ODDS_COLUMNS,
+    )
+
+
+def test_selected_rushing_props_require_game_and_player_identity_and_keep_backups_distinct():
+    summary = make_summary()
+    participant = summary.loc[summary["player_id"].eq("id_two")].iloc[0]
+    props = make_player_matched_odds([
+        {"player_id": "id_two", "player_name": "Alex Runner"},
+        {"player_id": "id_two", "player_name": "Alex Runner", "outcome_name": "Under", "price": -115},
+        {"player_id": "id_one"},
+        {"nflverse_game_id": "2026_01_OTHER", "player_id": "id_two"},
+        {"market_key": "player_pass_yds", "player_id": "id_two"},
+        {"match_status": "unmatched", "player_id": "id_two"},
+        {"event_match_status": "unmatched", "player_id": "id_two"},
+    ])
+    before = props.copy(deep=True)
+
+    result = filter_selected_rb_rushing_props(props, participant)
+
+    assert result["player_id"].tolist() == ["id_two", "id_two"]
+    assert result["outcome_name"].tolist() == ["Over", "Under"]
+    pd.testing.assert_frame_equal(props, before)
+    unresolved = participant.copy()
+    unresolved["player_id"] = pd.NA
+    assert filter_selected_rb_rushing_props(props, unresolved).empty
+    no_game = participant.copy()
+    no_game["game_id"] = " "
+    assert filter_selected_rb_rushing_props(props, no_game).empty
+
+
+def test_rushing_prop_display_pairs_sides_keeps_points_and_rejects_duplicate_sides():
+    props = make_player_matched_odds([
+        {"bookmaker_key": "fan", "bookmaker_title": "FanDuel", "point": 56.5, "outcome_name": "Over", "price": 105},
+        {"bookmaker_key": "fan", "bookmaker_title": "FanDuel", "point": 56.5, "outcome_name": "Under", "price": -125},
+        {"bookmaker_key": "draft", "bookmaker_title": "DraftKings", "point": 55.5, "outcome_name": "Over", "price": -110},
+        {"bookmaker_key": "draft", "bookmaker_title": "DraftKings", "point": 55.5, "outcome_name": "Under", "price": -115},
+        {"bookmaker_key": "draft", "bookmaker_title": "DraftKings", "point": 57.5, "outcome_name": "Over", "price": 100},
+    ])
+    before = props.copy(deep=True)
+    display = prepare_rushing_prop_display(props)
+
+    assert display.columns.tolist() == RUSHING_PROP_DISPLAY_COLUMNS
+    assert display["Sportsbook"].tolist() == ["DraftKings", "DraftKings", "FanDuel"]
+    assert display["Rushing Yards Line"].tolist() == [55.5, 57.5, 56.5]
+    assert display.loc[0, ["Over Price", "Under Price"]].tolist() == [-110, -115]
+    assert pd.isna(display.loc[1, "Under Price"])
+    assert display.loc[0, "Market Updated"] == "2026-09-10T12:01:00Z"
+    pd.testing.assert_frame_equal(props, before)
+    with pytest.raises(ValueError, match="Duplicate sportsbook outcome"):
+        prepare_rushing_prop_display(make_player_matched_odds([{}, {"price": -120}]))
+
+
+def test_rushing_prop_warnings_are_game_scoped_and_retrieval_time_is_deterministic():
+    summary = make_summary()
+    participant = summary.loc[summary["player_id"].eq("id_one")].iloc[0]
+    props = make_player_matched_odds([
+        {"match_status": "unmatched"},
+        {"match_status": "ambiguous", "player_name": "Other RB"},
+        {"nflverse_game_id": "2026_01_OTHER", "nflverse_home_team": "BUF", "nflverse_away_team": "MIA", "event_match_status": "ambiguous"},
+    ])
+    odds_result = type("OddsResult", (), {"player_matched_odds": props})()
+    warnings = build_selected_rb_prop_warnings(odds_result, participant)
+
+    assert any("could not be matched to nflverse" in warning for warning in warnings)
+    assert any("ambiguous nflverse matches" in warning for warning in warnings)
+    assert not any("multiple schedule games" in warning for warning in warnings)
+    unresolved = participant.copy()
+    unresolved["player_id"] = pd.NA
+    assert build_selected_rb_prop_warnings(odds_result, unresolved) == [
+        "Selected participant is unresolved, so rushing-yard lines cannot be matched."
+    ]
+    assert build_selected_rb_prop_warnings(None, participant) == [
+        "Rushing-yard odds were not requested for this report."
+    ]
+    assert format_odds_retrieval_time("2026-09-10T12:34:56-05:00") == "2026-09-10 17:34 UTC"
+    with pytest.raises(ValueError, match="timezone-aware"):
+        format_odds_retrieval_time("2026-09-10T12:34:56")

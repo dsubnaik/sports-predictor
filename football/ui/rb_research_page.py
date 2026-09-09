@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Callable
 from urllib.error import URLError
 
@@ -18,39 +18,44 @@ from football.pipeline import WeeklyRBResearchResult, build_weekly_rb_research
 from football.ui.rb_research_view import (
     DEFENSIVE_MATCHUP_RANK_HELP,
     build_participant_options,
+    build_selected_rb_prop_warnings,
     build_warning_counts,
     default_history_season,
     display_value,
     filter_defense_game_log,
     filter_rb_game_log,
+    filter_selected_rb_rushing_props,
     find_participant,
+    format_odds_retrieval_time,
     prepare_defense_log_display,
+    prepare_rushing_prop_display,
     prepare_rb_log_display,
     prepare_summary_display,
 )
 
 
-@st.cache_data(ttl=6 * 60 * 60, show_spinner=False)
 def load_rb_research(
     report_season: int,
     report_week: int,
     as_of_date: date,
     history_season: int,
+    include_player_props: bool = True,
 ) -> WeeklyRBResearchResult:
-    """Build and cache the expensive weekly RB research products per inputs."""
+    """Build a fresh RB report with current rushing-yard odds."""
 
     return build_weekly_rb_research(
         report_season=report_season,
         report_week=report_week,
         as_of_date=as_of_date,
         history_season=history_season,
+        include_player_props=include_player_props,
     )
 
 
 def render_football_rb_research_page(
     *,
     streamlit_module: Any | None = None,
-    report_loader: Callable[[int, int, date, int], WeeklyRBResearchResult] = load_rb_research,
+    report_loader: Callable[..., WeeklyRBResearchResult] = load_rb_research,
 ) -> None:
     """Render the RB research page; optional dependencies support isolated UI tests."""
 
@@ -89,29 +94,31 @@ def render_football_rb_research_page(
             "history_season": int(history_season),
         }
         try:
-            with ui.spinner("Loading nflverse data and building RB research tables..."):
-                result = report_loader(**inputs)
+            with ui.spinner("Loading research and sportsbook data..."):
+                result = report_loader(**inputs, include_player_props=True)
+            retrieval_time = datetime.now(timezone.utc)
             ui.session_state["football_rb_research_inputs"] = inputs
             ui.session_state["football_rb_research_result"] = result
+            ui.session_state["football_rb_research_odds_retrieved_at"] = retrieval_time
             ui.session_state.pop("football_rb_research_selected_participant", None)
         except ValueError as error:
             ui.error(f"Could not build the report from the available data: {error}")
-            ui.caption("Data source: nflverse via nflreadpy.")
+            ui.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
             ui.stop()
         except (ImportError, ModuleNotFoundError) as error:
             ui.error(f"Could not load the nflverse dependency: {error}")
-            ui.caption("Data source: nflverse via nflreadpy.")
+            ui.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
             ui.stop()
         except (OSError, TimeoutError, URLError, RequestException) as error:
-            ui.error(f"Could not download nflverse data. Check the network and try again. {error}")
-            ui.caption("Data source: nflverse via nflreadpy.")
+            ui.error(f"Could not download report or sportsbook data. Check the network and try again. {error}")
+            ui.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
             ui.stop()
 
     inputs = ui.session_state.get("football_rb_research_inputs")
     result = ui.session_state.get("football_rb_research_result")
     if inputs is None or result is None:
         ui.caption("No football data will load until you generate the report.")
-        ui.caption("Data source: nflverse via nflreadpy.")
+        ui.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
         ui.stop()
 
     ui.caption(f"Report season {inputs['report_season']}, Week {inputs['report_week']}. Historical season used: {inputs['history_season']}.")
@@ -120,14 +127,14 @@ def render_football_rb_research_page(
     ui.caption(DEFENSIVE_MATCHUP_RANK_HELP)
     if result.summary.empty:
         ui.info("No scheduled team matchups were found for these report inputs.")
-        ui.caption("Data source: nflverse via nflreadpy.")
+        ui.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
         ui.stop()
     ui.dataframe(prepare_summary_display(result.summary), use_container_width=True, hide_index=True)
 
     options = build_participant_options(result.summary)
     if not options:
         ui.info("No resolved expected RB participants are available to select. Unresolved rows remain in the summary above.")
-        ui.caption("Data source: nflverse via nflreadpy.")
+        ui.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
         ui.stop()
     option_by_label = {option.label: option.option_id for option in options}
     selected_label = ui.selectbox("Expected backfield participant", list(option_by_label), key="football_rb_research_selected_participant")
@@ -137,6 +144,37 @@ def render_football_rb_research_page(
         ui.stop()
 
     _render_selected_context(ui, participant)
+
+    ui.subheader("Live Rushing-Yard Lines")
+    player_prop_odds = result.player_prop_odds
+    selected_props = None
+    if player_prop_odds is not None:
+        selected_props = filter_selected_rb_rushing_props(
+            player_prop_odds.player_matched_odds,
+            participant,
+        )
+    for warning in build_selected_rb_prop_warnings(
+        player_prop_odds,
+        participant,
+        selected_props,
+    ):
+        ui.warning(warning)
+    if selected_props is None or selected_props.empty:
+        ui.info("No matched rushing-yard sportsbook line is available for this participant.")
+    else:
+        ui.dataframe(
+            prepare_rushing_prop_display(selected_props),
+            use_container_width=True,
+            hide_index=True,
+        )
+    retrieval_time = ui.session_state.get("football_rb_research_odds_retrieved_at")
+    if player_prop_odds is not None and retrieval_time is not None:
+        ui.caption(
+            f"Odds retrieved: {format_odds_retrieval_time(retrieval_time)}. "
+            "Lines are the values returned when this report was generated; "
+            "sportsbook market-update times are shown in the table."
+        )
+
     rb_log = filter_rb_game_log(result.rb_game_logs, participant)
     defense_log = filter_defense_game_log(result.defense_game_logs, participant)
     ui.subheader("Selected RB Historical Game Log")
@@ -149,7 +187,7 @@ def render_football_rb_research_page(
         ui.info("No defense-versus-RB game log is available for the selected opponent.")
     else:
         ui.dataframe(prepare_defense_log_display(defense_log), use_container_width=True, hide_index=True)
-    ui.caption("Data source: nflverse via nflreadpy.")
+    ui.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
 
 
 def _render_warning_summary(ui: Any, summary: Any) -> None:
