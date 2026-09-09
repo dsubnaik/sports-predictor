@@ -1,6 +1,7 @@
 """Unit tests for append-only pending football decision recording."""
 
 import sqlite3
+from dataclasses import fields
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -9,6 +10,7 @@ import pytest
 import football.decisions as decisions
 from football.decisions import (
     DecisionIdConflictError,
+    DecisionNotFoundError,
     DecisionValidationError,
     DuplicateDecisionError,
     PendingDecision,
@@ -16,6 +18,8 @@ from football.decisions import (
     initialize_decision_store,
     list_decisions,
     record_decision,
+    settle_decision,
+    SettlementConflictError,
 )
 
 
@@ -211,5 +215,164 @@ def test_schema_allows_only_consistent_future_settlement_states(connection):
     )
     stored = get_decision(connection, "decision-qb")
     assert stored.status == "win"
-    assert stored.actual_result == "251"
+    assert stored.actual_result == Decimal("251")
     assert stored.settled_at == datetime(2026, 9, 11, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    "decision_factory, result, expected_status",
+    [
+        (qb_decision, Decimal("251"), "win"),
+        (qb_decision, Decimal("250"), "loss"),
+        (qb_decision, Decimal("250.5"), "push"),
+        (rb_decision, Decimal("67"), "win"),
+        (rb_decision, Decimal("68"), "loss"),
+        (rb_decision, Decimal("67.5"), "push"),
+    ],
+)
+def test_settlement_calculates_over_and_under_outcomes(
+    connection, decision_factory, result, expected_status
+):
+    decision = decision_factory()
+    record_decision(connection, decision)
+    settled = settle_decision(
+        connection,
+        decision.decision_id,
+        result,
+        settled_at=RECORDED_TIME + timedelta(hours=1),
+    )
+    assert settled.status == expected_status
+    assert settled.actual_result == result
+
+
+def test_settlement_uses_exact_decimal_comparison_and_round_trips_result(connection):
+    record_decision(connection, qb_decision(line=Decimal("0.3")))
+    settled = settle_decision(
+        connection,
+        "decision-qb",
+        Decimal("0.3000000000000000000000000000"),
+        settled_at=RECORDED_TIME,
+    )
+    assert settled.status == "push"
+    assert settled.actual_result == Decimal("0.3")
+    assert get_decision(connection, "decision-qb").actual_result == Decimal("0.3")
+    assert list_decisions(connection)[0].actual_result == Decimal("0.3")
+
+
+def test_settlement_compares_negative_official_results_without_restriction(connection):
+    record_decision(connection, qb_decision(line=Decimal("-1")))
+    settled = settle_decision(
+        connection, "decision-qb", Decimal("-0.5"), settled_at=RECORDED_TIME
+    )
+    assert settled.status == "win"
+
+
+def test_settlement_timestamp_normalizes_to_utc(connection):
+    record_decision(connection, qb_decision())
+    central_time = datetime(2026, 9, 10, 13, 5, tzinfo=timezone(timedelta(hours=-5)))
+    settled = settle_decision(connection, "decision-qb", 251, settled_at=central_time)
+    assert settled.settled_at == datetime(2026, 9, 10, 18, 5, tzinfo=timezone.utc)
+    assert settled.settled_at.tzinfo == timezone.utc
+
+
+def test_settlement_clock_is_injectable(connection):
+    record_decision(connection, qb_decision())
+    settled = settle_decision(
+        connection,
+        "decision-qb",
+        251,
+        clock=lambda: RECORDED_TIME + timedelta(minutes=10),
+    )
+    assert settled.settled_at == RECORDED_TIME + timedelta(minutes=10)
+
+
+def test_invalid_settlement_timestamps_are_rejected_without_changes(connection):
+    before = record_decision(connection, qb_decision())
+    with pytest.raises(DecisionValidationError, match="timezone-aware"):
+        settle_decision(connection, "decision-qb", 251, settled_at=datetime(2026, 9, 10, 18))
+    with pytest.raises(DecisionValidationError, match="must not precede"):
+        settle_decision(connection, "decision-qb", 251, settled_at=RECORDED_TIME - timedelta(seconds=1))
+    assert get_decision(connection, "decision-qb") == before
+
+
+@pytest.mark.parametrize("result", [float("nan"), float("inf"), float("-inf"), Decimal("NaN"), True])
+def test_invalid_actual_results_are_rejected_without_changes(connection, result):
+    before = record_decision(connection, qb_decision())
+    with pytest.raises(DecisionValidationError, match="actual_result"):
+        settle_decision(connection, "decision-qb", result, settled_at=RECORDED_TIME)
+    assert get_decision(connection, "decision-qb") == before
+
+
+def test_settlement_rejects_empty_or_missing_decision_identifier(connection):
+    with pytest.raises(DecisionValidationError, match="decision_id"):
+        settle_decision(connection, "  ", 251, settled_at=RECORDED_TIME)
+    with pytest.raises(DecisionNotFoundError, match="not found"):
+        settle_decision(connection, "missing", 251, settled_at=RECORDED_TIME)
+
+
+def test_settlement_changes_only_allowed_fields_and_preserves_snapshot(connection):
+    before = record_decision(connection, qb_decision())
+    settled = settle_decision(connection, "decision-qb", 251, settled_at=RECORDED_TIME)
+    allowed = {"status", "actual_result", "settled_at"}
+    for field in fields(before):
+        if field.name not in allowed:
+            assert getattr(settled, field.name) == getattr(before, field.name)
+    assert settled.status == "win"
+    assert settled.actual_result == Decimal("251")
+    assert settled.settled_at == RECORDED_TIME
+
+
+def test_exact_settlement_retry_is_idempotent_and_keeps_original_timestamp(connection):
+    record_decision(connection, qb_decision())
+    initial = settle_decision(
+        connection, "decision-qb", Decimal("251.00"), settled_at=RECORDED_TIME
+    )
+    retried = settle_decision(
+        connection,
+        " decision-qb ",
+        Decimal("251.0"),
+        settled_at=RECORDED_TIME + timedelta(days=1),
+    )
+    assert retried == initial
+    assert retried.settled_at == RECORDED_TIME
+
+
+def test_conflicting_settlement_retry_and_inconsistent_settlement_are_rejected(connection):
+    record_decision(connection, qb_decision())
+    initial = settle_decision(connection, "decision-qb", 251, settled_at=RECORDED_TIME)
+    with pytest.raises(SettlementConflictError, match="conflicts"):
+        settle_decision(connection, "decision-qb", 252, settled_at=RECORDED_TIME)
+    assert get_decision(connection, "decision-qb") == initial
+
+    connection.execute(
+        "UPDATE decisions SET actual_result = ? WHERE decision_id = ?",
+        ("249", "decision-qb"),
+    )
+    with pytest.raises(SettlementConflictError, match="inconsistent"):
+        settle_decision(connection, "decision-qb", 249, settled_at=RECORDED_TIME)
+    assert get_decision(connection, "decision-qb").actual_result == Decimal("249")
+
+
+def test_failed_database_settlement_does_not_leave_a_partial_update(connection):
+    before = record_decision(connection, qb_decision())
+    connection.execute(
+        """
+        CREATE TRIGGER reject_decision_settlement
+        BEFORE UPDATE ON decisions
+        BEGIN
+            SELECT RAISE(ABORT, 'test settlement failure');
+        END
+        """
+    )
+    with pytest.raises(decisions.DecisionStoreError, match="database constraint"):
+        settle_decision(connection, "decision-qb", 251, settled_at=RECORDED_TIME)
+    assert get_decision(connection, "decision-qb") == before
+
+
+def test_connection_remains_usable_after_settlement_success_and_failure(connection):
+    record_decision(connection, qb_decision())
+    settle_decision(connection, "decision-qb", 251, settled_at=RECORDED_TIME)
+    connection.execute("SELECT 1").fetchone()
+    with pytest.raises(SettlementConflictError):
+        settle_decision(connection, "decision-qb", 252, settled_at=RECORDED_TIME)
+    assert connection.execute("SELECT 1").fetchone() == (1,)
