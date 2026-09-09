@@ -329,8 +329,9 @@ def _validate_expected_duplicates(expected: pd.DataFrame) -> None:
     if expected.empty:
         return
 
-    resolved = expected.loc[~expected["resolution_missing"].fillna(False)].copy()
-    unresolved = expected.loc[expected["resolution_missing"].fillna(False)].copy()
+    resolution_missing = expected["resolution_missing"].fillna(False).astype(bool)
+    resolved = expected.loc[~resolution_missing].copy()
+    unresolved = expected.loc[resolution_missing].copy()
 
     mixed_teams = sorted(set(resolved["team"]).intersection(unresolved["team"]))
     if mixed_teams:
