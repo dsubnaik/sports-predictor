@@ -17,7 +17,14 @@ def payload(event_id="event", commence="2026-09-10T00:20:00Z", home="Seattle Sea
 
 
 def schedule(rows=None):
-    return pd.DataFrame(rows or [(2026, 1, "game", "2026-09-09", "20:20", "SEA", "NE", "home"), (2026, 1, "game", "2026-09-09", "20:20", "NE", "SEA", "away")], columns=SCHEDULE_COLUMNS)
+    rows = rows or [
+        (2026, 1, "game", "2026-09-09", "20:20", "SEA", "NE", "home"),
+        (2026, 1, "game", "2026-09-09", "20:20", "NE", "SEA", "away"),
+    ]
+    return pd.DataFrame(
+        [(*row, pd.NA, pd.NA) if len(row) == 8 else row for row in rows],
+        columns=SCHEDULE_COLUMNS,
+    )
 
 
 def test_normalizes_sorts_deduplicates_and_does_not_mutate_payload():

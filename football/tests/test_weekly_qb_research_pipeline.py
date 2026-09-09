@@ -78,6 +78,8 @@ def make_schedule_source(season: int) -> pd.DataFrame:
                 "gametime": "20:20",
                 "home_team": "KC",
                 "away_team": "LAC",
+                "home_score": 24.0,
+                "away_score": 17.0,
             },
             {
                 "season": season,
@@ -88,6 +90,8 @@ def make_schedule_source(season: int) -> pd.DataFrame:
                 "gametime": "13:00",
                 "home_team": "BUF",
                 "away_team": "MIA",
+                "home_score": 21.0,
+                "away_score": 14.0,
             },
             {
                 "season": season,
@@ -98,6 +102,8 @@ def make_schedule_source(season: int) -> pd.DataFrame:
                 "gametime": "20:20",
                 "home_team": "KC",
                 "away_team": "LAC",
+                "home_score": None,
+                "away_score": None,
             },
         ]
     )

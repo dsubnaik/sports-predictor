@@ -1,5 +1,8 @@
 """Build normalized team-game schedule rows for quarterback matchup research."""
 
+from numbers import Real
+
+import numpy as np
 import pandas as pd
 
 
@@ -12,6 +15,8 @@ SOURCE_COLUMNS = [
     "gametime",
     "home_team",
     "away_team",
+    "home_score",
+    "away_score",
 ]
 
 OUTPUT_COLUMNS = [
@@ -23,6 +28,8 @@ OUTPUT_COLUMNS = [
     "team",
     "opponent",
     "home_away",
+    "home_score",
+    "away_score",
 ]
 
 GAME_ID_DUPLICATE_COLUMNS = [
@@ -34,6 +41,8 @@ GAME_ID_DUPLICATE_COLUMNS = [
     "gametime",
     "home_team",
     "away_team",
+    "home_score",
+    "away_score",
 ]
 
 # Deterministic perspective order used after season/week/game_id sorting.
@@ -48,6 +57,7 @@ def normalize_schedule_dataset(schedules: pd.DataFrame) -> pd.DataFrame:
     schedule_data = schedules.drop_duplicates().loc[:, SOURCE_COLUMNS].copy()
     _validate_duplicate_game_ids(schedule_data)
     schedule_data = schedule_data.drop_duplicates().reset_index(drop=True)
+    _validate_scores(schedule_data)
 
     regular_season_games = schedule_data.loc[
         schedule_data["game_type"] == "REG"
@@ -154,6 +164,35 @@ def _validate_teams(schedule_data: pd.DataFrame) -> None:
             "NFL schedule source data has the same home_team and away_team "
             f"for game_id values: {game_ids}"
         )
+
+
+def _validate_scores(schedule_data: pd.DataFrame) -> None:
+    """Reject boolean and non-finite official scores while preserving missing scores."""
+
+    invalid_game_ids = []
+    for game_id, game_rows in schedule_data.groupby("game_id", sort=True):
+        for score_column in ("home_score", "away_score"):
+            for score in game_rows[score_column]:
+                if _is_missing_score(score):
+                    continue
+                if isinstance(score, bool) or not isinstance(score, Real):
+                    invalid_game_ids.append(game_id)
+                    break
+                if not np.isfinite(score):
+                    invalid_game_ids.append(game_id)
+                    break
+
+    if invalid_game_ids:
+        raise ValueError(
+            "NFL schedule source data has invalid home_score or away_score "
+            f"for game_id values: {sorted(set(invalid_game_ids))}"
+        )
+
+
+def _is_missing_score(score: object) -> bool:
+    """Return whether a schedule score is missing without coercing source values."""
+
+    return bool(pd.isna(score))
 
 
 def _is_missing_team(team_values: pd.Series) -> pd.Series:

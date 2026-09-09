@@ -61,6 +61,8 @@ def make_schedule(season):
                 "gametime": "20:20",
                 "home_team": "KC",
                 "away_team": "LAC",
+                "home_score": 24.0,
+                "away_score": 17.0,
             },
             {
                 "season": season,
@@ -71,6 +73,8 @@ def make_schedule(season):
                 "gametime": "20:20",
                 "home_team": "KC",
                 "away_team": "LAC",
+                "home_score": None,
+                "away_score": None,
             },
         ]
     )
