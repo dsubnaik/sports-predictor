@@ -39,6 +39,10 @@ from football.reports.build_weekly_rb_matchup_report import (
     OUTPUT_COLUMNS as RB_REPORT_COLUMNS,
     build_weekly_rb_matchup_report,
 )
+from football.pipeline.build_weekly_player_prop_odds import (
+    WeeklyPlayerPropOddsResult,
+    build_weekly_player_prop_odds,
+)
 
 
 Loader = Callable[..., Any]
@@ -51,6 +55,7 @@ class WeeklyRBResearchResult:
     summary: pd.DataFrame
     rb_game_logs: pd.DataFrame
     defense_game_logs: pd.DataFrame
+    player_prop_odds: WeeklyPlayerPropOddsResult | None = None
 
 
 def build_weekly_rb_research(
@@ -62,6 +67,10 @@ def build_weekly_rb_research(
     player_stats_loader: Loader | None = None,
     schedule_loader: Loader | None = None,
     depth_chart_loader: Loader | None = None,
+    include_player_props: bool = False,
+    odds_api_key: str | None = None,
+    odds_event_fetcher: Loader | None = None,
+    odds_event_props_fetcher: Loader | None = None,
 ) -> WeeklyRBResearchResult:
     """Build weekly RB summary and relevant historical research logs.
 
@@ -70,6 +79,8 @@ def build_weekly_rb_research(
     whole report slate; this function does not infer game-specific cutoffs.
     """
 
+    if not isinstance(include_player_props, bool):
+        raise TypeError("include_player_props must be a boolean")
     _validate_report_value(report_season, "report_season")
     _validate_report_value(report_week, "report_week")
 
@@ -139,6 +150,19 @@ def build_weekly_rb_research(
     )
     summary = _preserve_history_context(summary, selected_history_season)
 
+    player_prop_odds = None
+    if include_player_props:
+        player_prop_odds = build_weekly_player_prop_odds(
+            schedule_rows,
+            _expected_rb_player_reference(expected_rbs),
+            report_season,
+            report_week,
+            ("player_rush_yds",),
+            api_key=odds_api_key,
+            event_fetcher=odds_event_fetcher,
+            event_props_fetcher=odds_event_props_fetcher,
+        )
+
     return WeeklyRBResearchResult(
         summary=summary,
         rb_game_logs=_build_relevant_rb_logs(
@@ -153,7 +177,23 @@ def build_weekly_rb_research(
             selected_history_season,
             history_cutoff_week,
         ),
+        player_prop_odds=player_prop_odds,
     )
+
+
+def _expected_rb_player_reference(expected_rbs: pd.DataFrame) -> pd.DataFrame:
+    """Map every expected backfield participant into the odds matcher schema."""
+
+    reference = expected_rbs.loc[
+        :,
+        ["player_id", "player_name", "team", "participant_order"],
+    ].copy()
+    reference["position"] = "RB"
+    return reference.sort_values(
+        ["team", "participant_order", "player_id", "player_name"],
+        kind="mergesort",
+        na_position="last",
+    ).loc[:, ["player_id", "player_name", "team", "position"]].reset_index(drop=True)
 
 
 def _empty_result() -> WeeklyRBResearchResult:
