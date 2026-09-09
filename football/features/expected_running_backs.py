@@ -161,6 +161,7 @@ def _resolve_automatic_participants(
         ].transform("max")
         selected = eligible.loc[eligible["_snapshot_date"].eq(latest_dates)].copy()
 
+    _normalize_selected_rb_player_ids(selected)
     _validate_selected_rb_rows(selected)
     chosen = _choose_unambiguous_same_day_snapshots(selected)
     rbs = chosen.loc[chosen["position"].eq("RB")].copy()
@@ -177,8 +178,6 @@ def _resolve_automatic_participants(
 
 def _validate_selected_rb_rows(selected: pd.DataFrame) -> None:
     rbs = selected.loc[selected["position"].eq("RB")].copy()
-    _validate_text(rbs, "player_id", "Selected RB depth-chart data")
-    _validate_text(rbs, "player_name", "Selected RB depth-chart data")
     rb_ranks = _positive_whole_numbers(
         rbs["depth_rank"],
         "Selected RB depth-chart depth_rank",
@@ -194,6 +193,27 @@ def _validate_selected_rb_rows(selected: pd.DataFrame) -> None:
     selected.loc[rbs.index, "depth_position"] = rb_positions.astype(
         "object"
     ).tolist()
+
+
+def _normalize_selected_rb_player_ids(selected: pd.DataFrame) -> None:
+    """Normalize selected canonical RB IDs before any identity comparisons."""
+
+    rbs = selected.loc[selected["position"].eq("RB"), "player_id"]
+    normalized = pd.Series(pd.NA, index=rbs.index, dtype="string")
+    for index, value in rbs.items():
+        if pd.isna(value):
+            continue
+        if not isinstance(value, str):
+            raise ValueError(
+                "Selected RB depth-chart player_id values must be strings "
+                "or missing values"
+            )
+        stripped = value.strip()
+        if stripped:
+            normalized.loc[index] = stripped
+
+    selected["player_id"] = selected["player_id"].astype("object")
+    selected.loc[rbs.index, "player_id"] = normalized.astype("object").tolist()
 
 
 def _choose_unambiguous_same_day_snapshots(
@@ -262,7 +282,10 @@ def _unique_rb_participants(rbs: pd.DataFrame) -> pd.DataFrame:
         "_snapshot_date",
     ]
     unique = rbs.drop_duplicates(subset=comparable).copy()
-    conflicts = unique.loc[unique.duplicated(["team", "player_id"], keep=False)]
+    identified = unique.loc[unique["player_id"].notna()].copy()
+    conflicts = identified.loc[
+        identified.duplicated(["team", "player_id"], keep=False)
+    ]
     if conflicts.empty:
         return unique
 
@@ -285,16 +308,29 @@ def _order_participants(rbs: pd.DataFrame) -> pd.DataFrame:
         return ordered
 
     ordered["_depth_position_sort"] = ordered["depth_position"].astype("string")
+    ordered["_player_name_sort"] = ordered["player_name"].astype("string")
     ordered["_player_id_sort"] = ordered["player_id"].astype("string")
     ordered = ordered.sort_values(
-        ["team", "depth_rank", "_depth_position_sort", "_player_id_sort"],
+        [
+            "team",
+            "depth_rank",
+            "_depth_position_sort",
+            "_player_name_sort",
+            "_player_id_sort",
+        ],
         kind="mergesort",
         na_position="last",
     )
     ordered["participant_order"] = (
         ordered.groupby("team", sort=False).cumcount() + 1
     )
-    return ordered.drop(columns=["_depth_position_sort", "_player_id_sort"])
+    return ordered.drop(
+        columns=[
+            "_depth_position_sort",
+            "_player_name_sort",
+            "_player_id_sort",
+        ]
+    )
 
 
 def _build_automatic_output(
@@ -308,6 +344,7 @@ def _build_automatic_output(
     for team in teams["team"]:
         team_rbs = rbs.loc[rbs["team"].eq(team)]
         for row in team_rbs.to_dict("records"):
+            missing_player_id = pd.isna(row["player_id"])
             records.append(
                 {
                     "report_season": report_season,
@@ -317,13 +354,19 @@ def _build_automatic_output(
                     "player_name": row["player_name"],
                     "position": "RB",
                     "participant_order": row["participant_order"],
-                    "selection_source": "depth_chart",
+                    "selection_source": (
+                        "unresolved" if missing_player_id else "depth_chart"
+                    ),
                     "depth_chart_date": row["_snapshot_date"],
                     "depth_chart_week": pd.NA,
                     "depth_position": row["depth_position"],
                     "depth_rank": row["depth_rank"],
-                    "resolution_missing": False,
-                    "selection_notes": "",
+                    "resolution_missing": missing_player_id,
+                    "selection_notes": (
+                        "Selected depth-chart participant lacks a stable player ID"
+                        if missing_player_id
+                        else ""
+                    ),
                 }
             )
 

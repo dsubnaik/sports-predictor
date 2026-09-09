@@ -71,14 +71,47 @@ def test_normalizer_requires_valid_snapshot_timestamps(value):
 
 
 @pytest.mark.parametrize("column", ["gsis_id", "player_name"])
-@pytest.mark.parametrize("value", [None, "", "   ", 12])
-def test_normalizer_requires_rb_identity(column, value):
+@pytest.mark.parametrize("value", [12])
+def test_normalizer_rejects_malformed_populated_rb_identity(column, value):
     source = raw_depth(
         [("2026-09-08", "KC", "Runner", "rb-1", "RB", "RB", 1)]
     )
     source.loc[0, column] = value
 
-    with pytest.raises(ValueError, match="nonblank strings"):
+    with pytest.raises(ValueError, match="strings or missing"):
+        normalize_nflverse_depth_charts(source)
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_normalizer_preserves_missing_rb_ids_for_later_selection(value):
+    source = raw_depth(
+        [("2026-09-01", "KC", "Unidentified", value, "RB", "RB", 3)]
+    )
+
+    result = normalize_nflverse_depth_charts(source)
+
+    assert pd.isna(result.loc[0, "player_id"])
+    assert result.loc[0, "player_name"] == "Unidentified"
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_normalizer_preserves_missing_rb_names_for_later_selection(value):
+    source = raw_depth(
+        [("2026-09-01", "KC", value, "rb-1", "RB", "RB", 3)]
+    )
+
+    result = normalize_nflverse_depth_charts(source)
+
+    assert pd.isna(result.loc[0, "player_name"])
+    assert result.loc[0, "player_id"] == "rb-1"
+
+
+def test_normalizer_rejects_non_string_populated_rb_ids():
+    source = raw_depth(
+        [("2026-09-01", "KC", "Malformed", 123, "RB", "RB", 3)]
+    )
+
+    with pytest.raises(ValueError, match="player_id.*strings or missing"):
         normalize_nflverse_depth_charts(source)
 
 
@@ -115,6 +148,51 @@ def test_categorical_depth_positions_are_preserved_without_numeric_conversion():
     assert all(isinstance(value, str) for value in result["depth_position"])
 
 
+@pytest.mark.parametrize("value", [11, np.int32(11), 11.0])
+def test_numeric_raw_pos_slot_codes_normalize_to_categorical_text(value):
+    source = raw_depth(
+        [("2026-09-08", "KC", "Runner", "rb-1", "RB", value, 2)]
+    )
+
+    result = normalize_nflverse_depth_charts(source)
+
+    assert result.loc[0, "depth_position"] == "11"
+    assert result.loc[0, "depth_rank"] == 2
+
+
+def test_realistic_2026_numeric_slot_fixture_flows_through_resolution():
+    source = raw_depth(
+        [
+            ("2026-09-08T11:56:57Z", "ARI", "Runner", "rb-1", "RB", np.int32(11), np.int32(1)),
+        ]
+    )
+
+    canonical = normalize_nflverse_depth_charts(source)
+    from football.features.expected_running_backs import resolve_expected_running_backs
+
+    result = resolve_expected_running_backs(
+        pd.DataFrame({"team": ["ARI"]}),
+        canonical,
+        2026,
+        1,
+        "2026-09-08",
+    )
+
+    assert result.loc[0, "player_id"] == "rb-1"
+    assert result.loc[0, "depth_position"] == "11"
+    assert result.loc[0, "depth_rank"] == 1
+
+
+@pytest.mark.parametrize("value", [True, 11.5, np.inf, -np.inf])
+def test_invalid_numeric_raw_pos_slot_codes_raise(value):
+    source = raw_depth(
+        [("2026-09-08", "KC", "Runner", "rb-1", "RB", value, 1)]
+    )
+
+    with pytest.raises(ValueError, match="depth_position.*categorical codes"):
+        normalize_nflverse_depth_charts(source)
+
+
 @pytest.mark.parametrize("value", [None, pd.NA, "", "   "])
 def test_missing_or_blank_depth_position_normalizes_to_missing(value):
     source = raw_depth(
@@ -134,7 +212,6 @@ def test_missing_or_blank_depth_position_normalizes_to_missing(value):
         ("pos_rank", True),
         ("pos_rank", np.inf),
         ("pos_rank", "RB"),
-        ("pos_slot", 12),
         ("pos_slot", False),
         ("pos_slot", np.inf),
     ],

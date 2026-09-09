@@ -301,6 +301,28 @@ def test_unresolved_participant_row_is_preserved():
     assert bool(kc["rb_history_missing"]) is False
 
 
+def test_mixed_resolved_and_missing_id_participants_are_preserved():
+    expected = pd.DataFrame(
+        [
+            expected_row("KC", "rb_kc_1", "Runner", 1),
+            expected_row("KC", pd.NA, "Unidentified", 2, missing=True),
+        ],
+        columns=EXPECTED_RB_COLUMNS,
+    )
+    expected.loc[1, "selection_notes"] = (
+        "Selected depth-chart participant lacks a stable player ID"
+    )
+
+    result = build(expected=expected)
+
+    assert result.loc[result["team"].eq("KC")].shape[0] == 2
+    missing = result.loc[result["player_id"].isna()].iloc[0]
+    assert bool(missing["participant_resolution_missing"])
+    assert bool(missing["rb_history_missing"])
+    assert pd.isna(missing["rb_season_rushing_yards_avg"])
+    assert not bool(missing["multiple_expected_rbs"])
+
+
 def test_resolved_participant_without_rb_history_is_preserved_and_flagged():
     rbs = make_rb_metrics().loc[lambda data: data["player_id"].ne("rb_kc_2")]
 
