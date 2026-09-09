@@ -1,11 +1,13 @@
-"""Append-only SQLite storage for pending football research decisions.
+"""SQLite storage for football research decisions and single-decision settlement.
 
 This module records the immutable odds snapshot selected during research.  The
 ``sportsbook`` field is the stable Odds API ``bookmaker_key``, not its mutable
-display title. It does not settle decisions and deliberately provides no
-update or upsert API; a future settlement component may update only ``status``,
-``actual_result``, and ``settled_at`` while preserving the original snapshot
-fields.
+display title. Recording creates only pending decisions. Settlement is a
+separate operation that derives ``win``, ``loss``, or ``push`` from the stored
+selection, stored line, and official actual result. It may change only
+``status``, ``actual_result``, and ``settled_at``; exact retries are idempotent
+and conflicting retries never overwrite stored results. Profit/loss and
+external result retrieval remain outside this module's scope.
 """
 
 from __future__ import annotations
@@ -39,6 +41,14 @@ class DuplicateDecisionError(DecisionStoreError):
 
 class DecisionIdConflictError(DecisionStoreError):
     """Raised when a supplied or generated decision ID already exists."""
+
+
+class DecisionNotFoundError(DecisionStoreError):
+    """Raised when settlement is requested for an unknown decision ID."""
+
+
+class SettlementConflictError(DecisionStoreError):
+    """Raised when a settlement conflicts with an existing settled decision."""
 
 
 @dataclass(frozen=True)
@@ -93,7 +103,7 @@ class StoredDecision:
     odds_retrieved_at: datetime
     research_notes: str | None
     status: str
-    actual_result: str | None
+    actual_result: Decimal | None
     settled_at: datetime | None
 
 
@@ -222,6 +232,81 @@ def list_decisions(connection: sqlite3.Connection) -> list[StoredDecision]:
     return [_row_to_decision(row) for row in rows]
 
 
+def settle_decision(
+    connection: sqlite3.Connection,
+    decision_id: object,
+    actual_result: object,
+    *,
+    settled_at: object | None = None,
+    clock: Callable[[], object] | None = None,
+) -> StoredDecision:
+    """Settle one pending decision from its immutable line and selection.
+
+    Exact canonical-result retries return the original settled row unchanged.
+    A different result or an inconsistent stored settlement raises
+    ``SettlementConflictError`` without overwriting anything.
+    """
+
+    _require_connection(connection)
+    identifier = _required_text(decision_id, "decision_id")
+    result = _actual_result(actual_result)
+    selected_clock = clock or (lambda: datetime.now(timezone.utc))
+
+    connection.execute("SAVEPOINT settle_decision")
+    try:
+        existing = _get_decision_by_id(connection, identifier)
+        if existing is None:
+            raise DecisionNotFoundError("decision_id was not found")
+        timestamp = _settlement_timestamp(
+            settled_at if settled_at is not None else selected_clock(), existing.recorded_at
+        )
+        requested_status = _settlement_status(existing.selection, existing.line, result)
+
+        if existing.status != "pending":
+            _validate_existing_settlement(existing)
+            if existing.actual_result == result:
+                connection.execute("RELEASE settle_decision")
+                return existing
+            raise SettlementConflictError("settlement result conflicts with the stored settlement")
+
+        cursor = connection.execute(
+            """
+            UPDATE decisions
+            SET status = ?, actual_result = ?, settled_at = ?
+            WHERE decision_id = ? AND status = 'pending'
+            """,
+            (requested_status, _decimal_text(result), _timestamp_text(timestamp), identifier),
+        )
+        if cursor.rowcount == 1:
+            settled = _get_decision_by_id(connection, identifier)
+            if settled is None:
+                raise DecisionNotFoundError("decision_id was not found")
+            connection.execute("RELEASE settle_decision")
+            return settled
+
+        # A concurrent writer may have settled the row after the initial read.
+        current = _get_decision_by_id(connection, identifier)
+        if current is None:
+            raise DecisionNotFoundError("decision_id was not found")
+        _validate_existing_settlement(current)
+        if current.actual_result == result:
+            connection.execute("RELEASE settle_decision")
+            return current
+        raise SettlementConflictError("settlement result conflicts with the stored settlement")
+    except DecisionStoreError:
+        connection.execute("ROLLBACK TO settle_decision")
+        connection.execute("RELEASE settle_decision")
+        raise
+    except sqlite3.IntegrityError as error:
+        connection.execute("ROLLBACK TO settle_decision")
+        connection.execute("RELEASE settle_decision")
+        raise DecisionStoreError("decision settlement violated a database constraint") from error
+    except Exception:
+        connection.execute("ROLLBACK TO settle_decision")
+        connection.execute("RELEASE settle_decision")
+        raise
+
+
 def _normalize_pending_decision(
     decision: PendingDecision,
     *,
@@ -311,21 +396,29 @@ def _american_price(value: object) -> int:
 
 
 def _decimal_line(value: object) -> Decimal:
+    return _finite_decimal(value, "line")
+
+
+def _actual_result(value: object) -> Decimal:
+    return _finite_decimal(value, "actual_result")
+
+
+def _finite_decimal(value: object, field: str) -> Decimal:
     if isinstance(value, bool):
-        raise DecisionValidationError("line must be a finite numeric value and not a boolean")
+        raise DecisionValidationError(f"{field} must be a finite numeric value and not a boolean")
     if isinstance(value, Decimal):
         line = value
     elif isinstance(value, Real):
         if not math.isfinite(value):
-            raise DecisionValidationError("line must be a finite numeric value and not a boolean")
+            raise DecisionValidationError(f"{field} must be a finite numeric value and not a boolean")
         try:
             line = Decimal(str(value))
         except InvalidOperation as error:
-            raise DecisionValidationError("line must be a finite numeric value and not a boolean") from error
+            raise DecisionValidationError(f"{field} must be a finite numeric value and not a boolean") from error
     else:
-        raise DecisionValidationError("line must be a finite numeric value and not a boolean")
+        raise DecisionValidationError(f"{field} must be a finite numeric value and not a boolean")
     if not line.is_finite():
-        raise DecisionValidationError("line must be a finite numeric value and not a boolean")
+        raise DecisionValidationError(f"{field} must be a finite numeric value and not a boolean")
     return line.normalize() if line != 0 else Decimal(0)
 
 
@@ -374,6 +467,39 @@ def _duplicate_exists(connection: sqlite3.Connection, decision: StoredDecision) 
     ).fetchone() is not None
 
 
+def _get_decision_by_id(connection: sqlite3.Connection, decision_id: str) -> StoredDecision | None:
+    row = connection.execute(
+        "SELECT * FROM decisions WHERE decision_id = ?", (decision_id,)
+    ).fetchone()
+    return _row_to_decision(row) if row is not None else None
+
+
+def _settlement_timestamp(value: object, recorded_at: datetime) -> datetime:
+    timestamp = _normalize_timestamp(value, "settled_at")
+    if timestamp < recorded_at:
+        raise DecisionValidationError("settled_at must not precede recorded_at")
+    return timestamp
+
+
+def _settlement_status(selection: str, line: Decimal, actual_result: Decimal) -> str:
+    if actual_result == line:
+        return "push"
+    if selection == "over":
+        return "win" if actual_result > line else "loss"
+    if selection == "under":
+        return "win" if actual_result < line else "loss"
+    raise SettlementConflictError("stored selection is inconsistent")
+
+
+def _validate_existing_settlement(decision: StoredDecision) -> None:
+    if decision.status not in _SETTLED_STATUSES:
+        raise SettlementConflictError("stored settlement status is inconsistent")
+    if decision.actual_result is None or decision.settled_at is None:
+        raise SettlementConflictError("stored settlement fields are inconsistent")
+    if _settlement_status(decision.selection, decision.line, decision.actual_result) != decision.status:
+        raise SettlementConflictError("stored settlement status is inconsistent")
+
+
 def _row_to_decision(row: sqlite3.Row | tuple[Any, ...]) -> StoredDecision:
     values = dict(row) if isinstance(row, sqlite3.Row) else {
         name: value for name, value in zip(_COLUMN_NAMES, row, strict=True)
@@ -388,7 +514,11 @@ def _row_to_decision(row: sqlite3.Row | tuple[Any, ...]) -> StoredDecision:
         recorded_at=_parse_timestamp(values["recorded_at"]),
         odds_retrieved_at=_parse_timestamp(values["odds_retrieved_at"]),
         research_notes=values["research_notes"], status=values["status"],
-        actual_result=values["actual_result"],
+        actual_result=(
+            Decimal(values["actual_result"])
+            if values["actual_result"] is not None
+            else None
+        ),
         settled_at=(
             _parse_timestamp(values["settled_at"])
             if values["settled_at"] is not None
