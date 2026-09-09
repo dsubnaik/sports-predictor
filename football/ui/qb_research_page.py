@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from urllib.error import URLError
 
 import streamlit as st
@@ -17,32 +17,36 @@ from football.ui.qb_research_view import (
     DEFENSIVE_MATCHUP_RANK_HELP,
     build_matchup_options,
     build_matchup_warnings,
+    build_selected_qb_prop_warnings,
     default_history_season,
     display_value,
     filter_defense_game_log,
     filter_qb_game_log,
+    filter_selected_qb_passing_props,
     find_matchup,
+    format_odds_retrieval_time,
     history_label,
     prepare_defense_log_display,
+    prepare_passing_prop_display,
     prepare_qb_log_display,
     prepare_summary_display,
 )
 
 
-@st.cache_data(ttl=6 * 60 * 60, show_spinner=False)
 def load_qb_research(
     report_season: int,
     report_week: int,
     as_of_date: date,
     history_season: int,
 ) -> WeeklyQBResearchResult:
-    """Build the weekly report once per input set to avoid repeated downloads."""
+    """Build a fresh QB report with current passing-yard odds."""
 
     return build_weekly_qb_research(
         report_season=report_season,
         report_week=report_week,
         as_of_date=as_of_date,
         history_season=history_season,
+        include_player_props=True,
     )
 
 
@@ -106,29 +110,31 @@ def render_football_qb_research_page() -> None:
             "history_season": int(history_season),
         }
         try:
-            with st.spinner("Loading nflverse data and building QB research tables..."):
+            with st.spinner("Loading research and sportsbook data..."):
                 result = load_qb_research(
                     report_inputs["report_season"],
                     report_inputs["report_week"],
                     report_inputs["as_of_date"],
                     report_inputs["history_season"],
                 )
+                retrieval_time = datetime.now(timezone.utc)
                 st.session_state["football_qb_research_inputs"] = report_inputs
                 st.session_state["football_qb_research_result"] = result
+                st.session_state["football_qb_research_odds_retrieved_at"] = retrieval_time
         except ValueError as error:
             st.error(f"Could not build the report from the available data: {error}")
-            st.caption("Data source: nflverse via nflreadpy.")
+            st.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
             st.stop()
         except (ImportError, ModuleNotFoundError) as error:
             st.error(f"Could not load the nflverse dependency: {error}")
-            st.caption("Data source: nflverse via nflreadpy.")
+            st.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
             st.stop()
         except (OSError, TimeoutError, URLError, RequestException) as error:
             st.error(
-                "Could not download nflverse data. Check the network and try again. "
+                "Could not download report or sportsbook data. Check the network and try again. "
                 f"{error}"
             )
-            st.caption("Data source: nflverse via nflreadpy.")
+            st.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
             st.stop()
 
     report_inputs = st.session_state.get("football_qb_research_inputs")
@@ -136,7 +142,7 @@ def render_football_qb_research_page() -> None:
 
     if report_inputs is None or result is None:
         st.caption("No football data will load until you generate the report.")
-        st.caption("Data source: nflverse via nflreadpy.")
+        st.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
         st.stop()
 
     st.caption(
@@ -150,7 +156,7 @@ def render_football_qb_research_page() -> None:
     st.caption(DEFENSIVE_MATCHUP_RANK_HELP)
     if summary_display.empty:
         st.info("No scheduled team matchups were found for these report inputs.")
-        st.caption("Data source: nflverse via nflreadpy.")
+        st.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
         st.stop()
 
     st.dataframe(summary_display, use_container_width=True, hide_index=True)
@@ -162,7 +168,7 @@ def render_football_qb_research_page() -> None:
 
     if selected_matchup is None:
         st.error("The selected matchup could not be found in the report result.")
-        st.caption("Data source: nflverse via nflreadpy.")
+        st.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
         st.stop()
 
     st.subheader("Selected Matchup")
@@ -190,6 +196,36 @@ def render_football_qb_research_page() -> None:
     for warning in build_matchup_warnings(selected_matchup):
         st.warning(warning)
 
+    st.subheader("Live Passing-Yard Lines")
+    player_prop_odds = result.player_prop_odds
+    selected_props = None
+    if player_prop_odds is not None:
+        selected_props = filter_selected_qb_passing_props(
+            player_prop_odds.player_matched_odds,
+            selected_matchup,
+        )
+    for warning in build_selected_qb_prop_warnings(
+        player_prop_odds,
+        selected_matchup,
+        selected_props,
+    ):
+        st.warning(warning)
+    if selected_props is None or selected_props.empty:
+        st.info("No matched passing-yard sportsbook line is available for this matchup.")
+    else:
+        st.dataframe(
+            prepare_passing_prop_display(selected_props),
+            use_container_width=True,
+            hide_index=True,
+        )
+    retrieval_time = st.session_state.get("football_qb_research_odds_retrieved_at")
+    if player_prop_odds is not None and retrieval_time is not None:
+        st.caption(
+            f"Odds retrieved: {format_odds_retrieval_time(retrieval_time)}. "
+            "Lines are the values returned when this report was generated; "
+            "sportsbook market-update times are shown in the table."
+        )
+
     qb_log = filter_qb_game_log(result.qb_game_logs, selected_matchup)
     defense_log = filter_defense_game_log(result.defense_game_logs, selected_matchup)
 
@@ -213,4 +249,4 @@ def render_football_qb_research_page() -> None:
             hide_index=True,
         )
 
-    st.caption("Data source: nflverse via nflreadpy.")
+    st.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
