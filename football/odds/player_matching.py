@@ -106,7 +106,14 @@ def _validated_candidates(players: pd.DataFrame) -> pd.DataFrame:
     relevant = reference.loc[reference["_position"].isin({"QB", "RB"})].copy()
     if relevant.empty:
         return pd.DataFrame(
-            columns=["player_id", "player_name", "team", "position", "_canonical_name"]
+            columns=[
+                "player_id",
+                "player_name",
+                "team",
+                "position",
+                "_canonical_name",
+                "_position",
+            ]
         )
 
     valid_id = relevant["player_id"].map(_valid_identity_text)
