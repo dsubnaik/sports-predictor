@@ -12,7 +12,6 @@ from numbers import Integral
 import numpy as np
 import pandas as pd
 
-from football.data.build_schedule_dataset import OUTPUT_COLUMNS as SCHEDULE_COLUMNS
 from football.features.expected_running_backs import (
     OUTPUT_COLUMNS as EXPECTED_RB_COLUMNS,
 )
@@ -129,7 +128,11 @@ def build_weekly_rb_matchup_report(
 
     _validate_report_value(report_season, "report_season")
     _validate_report_value(report_week, "report_week")
-    _validate_required_columns(schedule_rows, SCHEDULE_COLUMNS, "Schedule data")
+    _validate_required_columns(
+        schedule_rows,
+        SCHEDULE_CONTEXT_COLUMNS,
+        "Schedule data",
+    )
     _validate_required_columns(
         expected_running_backs,
         EXPECTED_RB_COLUMNS,

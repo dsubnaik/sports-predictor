@@ -23,7 +23,10 @@ def schedules(rows=None):
         (2026, 1, "game-1", "2026-09-09", "20:20", "SEA", "NE", "home"),
         (2026, 1, "game-1", "2026-09-09", "20:20", "NE", "SEA", "away"),
     ]
-    return pd.DataFrame(rows, columns=SCHEDULE_COLUMNS)
+    return pd.DataFrame(
+        [(*row, pd.NA, pd.NA) if len(row) == 8 else row for row in rows],
+        columns=SCHEDULE_COLUMNS,
+    )
 
 
 def players(rows=None):
