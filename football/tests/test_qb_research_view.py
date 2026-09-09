@@ -1,12 +1,21 @@
 import pandas as pd
+import pytest
 
+from football.pipeline.build_weekly_player_prop_odds import (
+    WEEKLY_PLAYER_PROP_ODDS_COLUMNS,
+)
 from football.ui.qb_research_view import (
     DEFENSIVE_MATCHUP_RANK_HELP,
+    PASSING_PROP_DISPLAY_COLUMNS,
     build_matchup_options,
+    build_selected_qb_prop_warnings,
     default_history_season,
     filter_defense_game_log,
     filter_qb_game_log,
+    filter_selected_qb_passing_props,
     find_matchup,
+    format_odds_retrieval_time,
+    prepare_passing_prop_display,
     prepare_defense_log_display,
     prepare_qb_log_display,
     prepare_summary_display,
@@ -266,3 +275,123 @@ def test_defensive_matchup_rank_help_explains_ranking_scope():
     assert "not a quarterback talent ranking or model prediction" in (
         DEFENSIVE_MATCHUP_RANK_HELP
     )
+
+
+def make_player_matched_odds(rows: list[dict[str, object]] | None = None) -> pd.DataFrame:
+    default = {
+        "event_id": "event-kc", "commence_time": "2026-09-11T00:20:00Z",
+        "home_team": "Kansas City Chiefs", "away_team": "Los Angeles Chargers",
+        "bookmaker_key": "draftkings", "bookmaker_title": "DraftKings",
+        "bookmaker_last_update": "2026-09-10T12:00:00Z",
+        "market_key": "player_pass_yds", "market_last_update": "2026-09-10T12:01:00Z",
+        "player_name": "Alex Smith", "outcome_name": "Over", "price": -110,
+        "point": 250.5, "nflverse_game_id": "2026_01_KC_LAC",
+        "nflverse_season": 2026, "nflverse_week": 1, "nflverse_home_team": "KC",
+        "nflverse_away_team": "LAC", "nflverse_kickoff_time": "2026-09-11T00:20:00Z",
+        "event_match_status": "matched", "event_match_method": "team_and_kickoff",
+        "event_match_candidate_count": 1, "event_match_note": "Matched",
+        "player_id": "same_name_kc", "nflverse_player_name": "Alex Smith",
+        "nflverse_team": "KC", "expected_position": "QB", "match_status": "matched",
+        "match_method": "canonical_name_and_position", "match_candidate_count": 1,
+        "match_note": "Matched",
+    }
+    return pd.DataFrame(
+        [{**default, **row} for row in (rows or [{}, {"outcome_name": "Under", "price": -115}])],
+        columns=WEEKLY_PLAYER_PROP_ODDS_COLUMNS,
+    )
+
+
+def test_selected_passing_props_require_game_and_player_identity_without_mutation():
+    summary = make_summary()
+    matchup = summary.loc[summary["team"] == "KC"].iloc[0]
+    props = make_player_matched_odds([
+        {},
+        {"outcome_name": "Under", "price": -115},
+        {"nflverse_game_id": "2026_01_BUF_MIA", "player_id": "same_name_kc"},
+        {"player_id": "other-qb"},
+        {"market_key": "player_rush_yds"},
+        {"match_status": "unmatched"},
+        {"event_match_status": "unmatched"},
+    ])
+    before = props.copy(deep=True)
+
+    result = filter_selected_qb_passing_props(props, matchup)
+
+    assert result["outcome_name"].tolist() == ["Over", "Under"]
+    pd.testing.assert_frame_equal(props, before)
+    unresolved = matchup.copy()
+    unresolved["expected_player_id"] = pd.NA
+    assert filter_selected_qb_passing_props(props, unresolved).empty
+    no_game = matchup.copy()
+    no_game["game_id"] = " "
+    assert filter_selected_qb_passing_props(props, no_game).empty
+
+
+def test_passing_prop_display_pairs_sides_keeps_points_and_sorts_deterministically():
+    props = make_player_matched_odds([
+        {"bookmaker_key": "fan", "bookmaker_title": "FanDuel", "point": 251.5, "outcome_name": "Over", "price": 105},
+        {"bookmaker_key": "fan", "bookmaker_title": "FanDuel", "point": 251.5, "outcome_name": "Under", "price": -125},
+        {"bookmaker_key": "draft", "bookmaker_title": "DraftKings", "point": 250.5, "outcome_name": "Over", "price": -110},
+        {"bookmaker_key": "draft", "bookmaker_title": "DraftKings", "point": 250.5, "outcome_name": "Under", "price": -115},
+        {"bookmaker_key": "draft", "bookmaker_title": "DraftKings", "point": 252.5, "outcome_name": "Over", "price": 100},
+    ])
+    before = props.copy(deep=True)
+
+    display = prepare_passing_prop_display(props)
+
+    assert display.columns.tolist() == PASSING_PROP_DISPLAY_COLUMNS
+    assert display["Sportsbook"].tolist() == ["DraftKings", "DraftKings", "FanDuel"]
+    assert display["Passing Yards Line"].tolist() == [250.5, 252.5, 251.5]
+    assert display.loc[0, ["Over Price", "Under Price"]].tolist() == [-110, -115]
+    assert pd.isna(display.loc[1, "Under Price"])
+    assert display.loc[0, "Market Updated"] == "2026-09-10T12:01:00Z"
+    pd.testing.assert_frame_equal(props, before)
+
+
+def test_passing_prop_display_rejects_duplicate_side_rows():
+    props = make_player_matched_odds([{}, {"price": -120}])
+    with pytest.raises(ValueError, match="Duplicate sportsbook outcome"):
+        prepare_passing_prop_display(props)
+
+
+def test_passing_prop_display_uses_bookmaker_key_fallback_and_warns_on_incomplete_pair():
+    summary = make_summary()
+    matchup = summary.loc[summary["team"] == "KC"].iloc[0]
+    props = make_player_matched_odds([{"bookmaker_title": pd.NA}])
+    display = prepare_passing_prop_display(props)
+    odds_result = type("OddsResult", (), {"player_matched_odds": props})()
+
+    assert display.loc[0, "Sportsbook"] == "draftkings"
+    assert "incomplete Over/Under" in " ".join(
+        build_selected_qb_prop_warnings(odds_result, matchup, props)
+    )
+
+
+def test_odds_warnings_are_selected_game_scoped_and_handle_unresolved_qb():
+    summary = make_summary()
+    matchup = summary.loc[summary["team"] == "KC"].iloc[0]
+    props = make_player_matched_odds([
+        {"match_status": "unmatched"},
+        {"match_status": "ambiguous", "player_name": "Other QB"},
+        {"nflverse_game_id": "2026_01_BUF_MIA", "nflverse_home_team": "BUF", "nflverse_away_team": "MIA", "event_match_status": "ambiguous"},
+    ])
+    odds_result = type("OddsResult", (), {"player_matched_odds": props})()
+    warnings = build_selected_qb_prop_warnings(odds_result, matchup)
+
+    assert any("could not be matched to nflverse" in warning for warning in warnings)
+    assert any("ambiguous nflverse matches" in warning for warning in warnings)
+    assert not any("multiple schedule games" in warning for warning in warnings)
+    unresolved = matchup.copy()
+    unresolved["expected_player_id"] = pd.NA
+    assert build_selected_qb_prop_warnings(odds_result, unresolved) == [
+        "Expected QB is unresolved, so passing-yard lines cannot be matched."
+    ]
+    assert build_selected_qb_prop_warnings(None, matchup) == [
+        "Passing-yard odds were not requested for this report."
+    ]
+
+
+def test_retrieval_time_format_is_deterministic_and_requires_timezone():
+    assert format_odds_retrieval_time("2026-09-10T12:34:56-05:00") == "2026-09-10 17:34 UTC"
+    with pytest.raises(ValueError, match="timezone-aware"):
+        format_odds_retrieval_time("2026-09-10T12:34:56")
