@@ -6,13 +6,19 @@ import streamlit as st
 
 from baseball.ui.baseball_report_page import render_baseball_page
 from football.ui.qb_research_page import render_football_qb_research_page
+from football.ui.rb_research_page import render_football_rb_research_page
 
 
 st.set_page_config(page_title="Sports Predictor", layout="wide")
 
-pages = [
-    st.Page(render_baseball_page, title="Baseball"),
-    st.Page(render_football_qb_research_page, title="Football QB Research"),
-]
+pages = {
+    "Baseball": [
+        st.Page(render_baseball_page, title="Baseball Research", default=True),
+    ],
+    "Football": [
+        st.Page(render_football_qb_research_page, title="QB Research"),
+        st.Page(render_football_rb_research_page, title="RB Research"),
+    ],
+}
 
 st.navigation(pages, position="top").run()
