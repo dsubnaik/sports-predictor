@@ -1,7 +1,13 @@
+from copy import deepcopy
+
 import pandas as pd
 import pytest
 
-from football.pipeline import WeeklyQBResearchResult, build_weekly_qb_research
+from football.pipeline import (
+    WeeklyPlayerPropOddsResult,
+    WeeklyQBResearchResult,
+    build_weekly_qb_research,
+)
 
 
 def make_player_stats(season: int) -> pd.DataFrame:
@@ -323,3 +329,155 @@ def test_report_values_are_validated(report_season, report_week, match):
 
     with pytest.raises(ValueError, match=match):
         build_with(loaders, report_season=report_season, report_week=report_week)
+
+
+def _passing_prop_payload(player_name="Kansas QB", bookmakers=True) -> dict[str, object]:
+    return {
+        "id": "odds-kc-lac",
+        "commence_time": "2026-09-11T00:20:00Z",
+        "home_team": "Kansas City Chiefs",
+        "away_team": "Los Angeles Chargers",
+        "bookmakers": ([
+            {
+                "key": "draftkings",
+                "title": "DraftKings",
+                "last_update": "2026-09-10T12:00:00Z",
+                "markets": [{
+                    "key": "player_pass_yds",
+                    "last_update": "2026-09-10T12:01:00Z",
+                    "outcomes": [
+                        {"name": "Over", "description": player_name, "price": -110, "point": 250.5},
+                        {"name": "Under", "description": player_name, "price": -115, "point": 250.5},
+                    ],
+                }],
+            }
+        ] if bookmakers else []),
+    }
+
+
+def _passing_event_payload() -> list[dict[str, str]]:
+    return [{
+        "id": "odds-kc-lac",
+        "commence_time": "2026-09-11T00:20:00Z",
+        "home_team": "Kansas City Chiefs",
+        "away_team": "Los Angeles Chargers",
+    }]
+
+
+def test_passing_props_are_disabled_by_default_without_odds_calls():
+    loaders = RecordingLoaders()
+    calls = []
+    result = build_with(
+        loaders,
+        report_season=2026,
+        report_week=1,
+        odds_event_fetcher=lambda **_kwargs: calls.append("events"),
+        odds_event_props_fetcher=lambda *_args, **_kwargs: calls.append("props"),
+    )
+    baseline = build_with(RecordingLoaders(), report_season=2026, report_week=1)
+
+    assert result.player_prop_odds is None
+    assert calls == []
+    pd.testing.assert_frame_equal(result.summary, baseline.summary)
+    pd.testing.assert_frame_equal(result.qb_game_logs, baseline.qb_game_logs)
+    pd.testing.assert_frame_equal(result.defense_game_logs, baseline.defense_game_logs)
+
+
+def test_enabled_passing_props_reuses_loaded_schedule_and_expected_qb_reference():
+    loaders = RecordingLoaders()
+    event_calls, prop_calls = [], []
+    source_events = _passing_event_payload()
+    source_props = _passing_prop_payload()
+    events_before = deepcopy(source_events)
+    props_before = deepcopy(source_props)
+
+    def fetch_events(*, api_key):
+        event_calls.append(api_key)
+        return source_events
+
+    def fetch_props(event_id, market_keys, *, api_key):
+        prop_calls.append((event_id, market_keys, api_key))
+        return source_props
+
+    result = build_with(
+        loaders,
+        report_season=2026,
+        report_week=1,
+        include_player_props=True,
+        odds_api_key="test-key",
+        odds_event_fetcher=fetch_events,
+        odds_event_props_fetcher=fetch_props,
+    )
+
+    assert isinstance(result.player_prop_odds, WeeklyPlayerPropOddsResult)
+    assert loaders.schedule_seasons == [2026]
+    assert loaders.depth_chart_seasons == [2026]
+    assert loaders.player_stats_seasons == [2025]
+    assert event_calls == ["test-key"]
+    assert prop_calls == [("odds-kc-lac", ("player_pass_yds",), "test-key")]
+    odds = result.player_prop_odds.player_matched_odds
+    assert odds["market_key"].tolist() == ["player_pass_yds", "player_pass_yds"]
+    assert odds["player_id"].tolist() == ["qb_kc", "qb_kc"]
+    assert odds["event_match_status"].tolist() == ["matched", "matched"]
+    assert odds["price"].tolist() == [-110, -115]
+    assert odds["point"].tolist() == [250.5, 250.5]
+    assert odds["bookmaker_last_update"].notna().all()
+    assert odds["market_last_update"].notna().all()
+    assert len(result.summary) == 4
+    assert source_events == events_before
+    assert source_props == props_before
+
+
+def test_enabled_odds_preserve_unmatched_rows_and_empty_bookmaker_response():
+    loaders = RecordingLoaders()
+    unmatched = build_with(
+        loaders,
+        report_season=2026,
+        report_week=1,
+        include_player_props=True,
+        odds_event_fetcher=lambda **_kwargs: _passing_event_payload(),
+        odds_event_props_fetcher=lambda *_args, **_kwargs: _passing_prop_payload("Unknown QB"),
+    )
+    assert unmatched.player_prop_odds.player_matched_odds["match_status"].tolist() == ["unmatched", "unmatched"]
+    empty = build_with(
+        RecordingLoaders(),
+        report_season=2026,
+        report_week=1,
+        include_player_props=True,
+        odds_event_fetcher=lambda **_kwargs: _passing_event_payload(),
+        odds_event_props_fetcher=lambda *_args, **_kwargs: _passing_prop_payload(bookmakers=False),
+    )
+    assert empty.player_prop_odds.normalized_odds.empty
+    assert empty.player_prop_odds.player_matched_odds.empty
+    assert len(empty.summary) == 4
+
+
+def test_enabled_odds_failures_propagate_without_a_partial_qb_result():
+    with pytest.raises(RuntimeError, match="event fetch failed"):
+        build_with(
+            RecordingLoaders(),
+            report_season=2026,
+            report_week=1,
+            include_player_props=True,
+            odds_event_fetcher=lambda **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("event fetch failed")
+            ),
+        )
+
+
+@pytest.mark.parametrize("value", [1, "true", None])
+def test_include_player_props_must_be_boolean_before_any_loader_or_fetcher(value):
+    loaders = RecordingLoaders()
+    calls = []
+    with pytest.raises(TypeError, match="include_player_props"):
+        build_with(
+            loaders,
+            report_season=2026,
+            report_week=1,
+            include_player_props=value,
+            odds_event_fetcher=lambda **_kwargs: calls.append("events"),
+        )
+    assert loaders.player_stats_seasons == []
+    assert loaders.schedule_seasons == []
+    assert loaders.depth_chart_seasons == []
+    assert calls == []

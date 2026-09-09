@@ -30,6 +30,10 @@ from football.features.qb_form_metrics import build_qb_form_metrics
 from football.reports.build_weekly_qb_matchup_report import (
     build_weekly_qb_matchup_report,
 )
+from football.pipeline.build_weekly_player_prop_odds import (
+    WeeklyPlayerPropOddsResult,
+    build_weekly_player_prop_odds,
+)
 
 
 Loader = Callable[..., Any]
@@ -42,6 +46,7 @@ class WeeklyQBResearchResult:
     summary: pd.DataFrame
     qb_game_logs: pd.DataFrame
     defense_game_logs: pd.DataFrame
+    player_prop_odds: WeeklyPlayerPropOddsResult | None = None
 
 
 def build_weekly_qb_research(
@@ -53,9 +58,15 @@ def build_weekly_qb_research(
     player_stats_loader: Loader | None = None,
     schedule_loader: Loader | None = None,
     depth_chart_loader: Loader | None = None,
+    include_player_props: bool = False,
+    odds_api_key: str | None = None,
+    odds_event_fetcher: Loader | None = None,
+    odds_event_props_fetcher: Loader | None = None,
 ) -> WeeklyQBResearchResult:
-    """Build summary, QB logs, and defense logs for weekly QB research."""
+    """Build QB research and, when requested, passing-yard prop odds."""
 
+    if not isinstance(include_player_props, bool):
+        raise TypeError("include_player_props must be a boolean")
     _validate_report_value(report_season, "report_season")
     _validate_report_value(report_week, "report_week")
     selected_history_season = _resolve_history_season(
@@ -125,11 +136,46 @@ def build_weekly_qb_research(
         history_cutoff_week,
     )
 
+    player_prop_odds = None
+    if include_player_props:
+        player_prop_odds = build_weekly_player_prop_odds(
+            schedule_rows,
+            _expected_qb_player_reference(expected_qbs),
+            report_season,
+            report_week,
+            ("player_pass_yds",),
+            api_key=odds_api_key,
+            event_fetcher=odds_event_fetcher,
+            event_props_fetcher=odds_event_props_fetcher,
+        )
+
     return WeeklyQBResearchResult(
         summary=summary,
         qb_game_logs=qb_game_logs,
         defense_game_logs=defense_game_logs,
+        player_prop_odds=player_prop_odds,
     )
+
+
+def _expected_qb_player_reference(expected_qbs: pd.DataFrame) -> pd.DataFrame:
+    """Map resolved expected QBs into the generic odds matcher reference schema."""
+
+    reference = expected_qbs.loc[
+        :,
+        ["expected_player_id", "expected_player_name", "team", "game_id"],
+    ].copy()
+    reference = reference.rename(
+        columns={
+            "expected_player_id": "player_id",
+            "expected_player_name": "player_name",
+        }
+    )
+    reference["position"] = "QB"
+    return reference.sort_values(
+        ["team", "game_id", "player_id", "player_name"],
+        kind="mergesort",
+        na_position="last",
+    ).loc[:, ["player_id", "player_name", "team", "position"]].reset_index(drop=True)
 
 
 def _resolve_history_season(
