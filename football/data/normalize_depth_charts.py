@@ -8,6 +8,8 @@ depth metadata are required to be complete.
 
 from __future__ import annotations
 
+from numbers import Integral
+
 import numpy as np
 import pandas as pd
 
@@ -90,14 +92,12 @@ def normalize_nflverse_depth_charts(
 
     rb_mask = normalized["position"].eq("RB")
     rbs = normalized.loc[rb_mask].copy()
-    _validate_text(rbs, "player_id", "NFL RB depth-chart data")
-    _validate_text(rbs, "player_name", "NFL RB depth-chart data")
     rb_ranks = _positive_whole_numbers(
         rbs["depth_rank"],
         "NFL RB depth-chart depth_rank",
         allow_missing=True,
     )
-    rb_positions = _nullable_categorical_text(
+    rb_positions = _nullable_depth_position_code(
         rbs["depth_position"],
         "NFL RB depth-chart depth_position",
     )
@@ -107,6 +107,16 @@ def normalize_nflverse_depth_charts(
     normalized["depth_position"] = _coerce_nullable_categorical_text(
         normalized["depth_position"]
     )
+    normalized["player_id"] = normalized["player_id"].astype("object")
+    normalized.loc[rb_mask, "player_id"] = _coerce_nullable_identity_text(
+        rbs["player_id"],
+        "NFL RB depth-chart data player_id",
+    ).astype("object").tolist()
+    normalized["player_name"] = normalized["player_name"].astype("object")
+    normalized.loc[rb_mask, "player_name"] = _coerce_nullable_identity_text(
+        rbs["player_name"],
+        "NFL RB depth-chart data player_name",
+    ).astype("object").tolist()
     normalized.loc[rb_mask, "depth_rank"] = rb_ranks.tolist()
     normalized.loc[rb_mask, "depth_position"] = rb_positions.tolist()
 
@@ -176,6 +186,10 @@ def _has_populated_columns(data: pd.DataFrame, columns: set[str]) -> bool:
 
 def _reject_conflicting_rb_snapshot_rows(data: pd.DataFrame) -> None:
     rbs = data.loc[data["position"].eq("RB")].copy()
+    if rbs.empty:
+        return
+
+    rbs = rbs.loc[rbs["player_id"].notna()].copy()
     if rbs.empty:
         return
 
@@ -270,6 +284,52 @@ def _coerce_nullable_categorical_text(values: pd.Series) -> pd.Series:
     text_values = values.map(lambda value: isinstance(value, str)).astype(bool)
     if text_values.any():
         stripped = values.loc[text_values].astype("string").str.strip()
+        nonblank = stripped.ne("")
+        normalized.loc[stripped.index[nonblank]] = stripped.loc[nonblank]
+    return normalized
+
+
+def _nullable_depth_position_code(values: pd.Series, label: str) -> pd.Series:
+    """Normalize raw nflverse depth-slot codes to nullable categorical text."""
+
+    normalized = pd.Series(pd.NA, index=values.index, dtype="string")
+    for index, value in values.items():
+        if pd.isna(value):
+            continue
+        if isinstance(value, (bool, np.bool_)):
+            raise ValueError(
+                f"{label} must contain categorical codes or missing values"
+            )
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                normalized.loc[index] = stripped
+            continue
+        if isinstance(value, (Integral, np.integer)):
+            normalized.loc[index] = str(int(value))
+            continue
+        if isinstance(value, (float, np.floating)):
+            if not np.isfinite(value) or not float(value).is_integer():
+                raise ValueError(
+                    f"{label} must contain categorical codes or missing values"
+                )
+            normalized.loc[index] = str(int(value))
+            continue
+        raise ValueError(f"{label} must contain categorical codes or missing values")
+    return normalized
+
+
+def _coerce_nullable_identity_text(values: pd.Series, label: str) -> pd.Series:
+    """Preserve nullable IDs while rejecting malformed populated values."""
+
+    normalized = pd.Series(pd.NA, index=values.index, dtype="string")
+    populated = values.notna()
+    invalid_type = populated & ~values.map(lambda value: isinstance(value, str))
+    if invalid_type.any():
+        raise ValueError(f"{label} values must be strings or missing values")
+
+    if populated.any():
+        stripped = values.loc[populated].astype("string").str.strip()
         nonblank = stripped.ne("")
         normalized.loc[stripped.index[nonblank]] = stripped.loc[nonblank]
     return normalized

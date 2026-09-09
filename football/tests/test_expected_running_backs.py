@@ -259,15 +259,119 @@ def test_non_rb_missing_identity_does_not_block_resolution():
     assert resolve(depth=depth)["player_id"].tolist() == ["rb-1"]
 
 
-@pytest.mark.parametrize("column", ["player_id", "player_name"])
-def test_selected_rb_missing_identity_raises(column):
+def test_selected_rb_missing_player_name_remains_resolved_by_stable_id():
     depth = canonical(
         [("KC", "rb-1", "Runner", "RB", "2026-09-08", "RB", 1)]
     )
-    depth.loc[0, column] = None
+    depth.loc[0, "player_name"] = None
 
-    with pytest.raises(ValueError, match="Selected RB.*nonblank strings"):
+    result = resolve(depth=depth)
+
+    assert result["player_id"].tolist() == ["rb-1"]
+    assert pd.isna(result.loc[0, "player_name"])
+    assert result["resolution_missing"].tolist() == [False]
+
+
+def test_selected_missing_id_participant_is_preserved_as_unresolved():
+    depth = canonical(
+        [
+            ("KC", "rb-1", "Resolved", "RB", "2026-09-08", "RB", 1),
+            ("KC", pd.NA, "Unidentified", "RB", "2026-09-08", "RB", 2),
+        ]
+    )
+
+    result = resolve(depth=depth)
+
+    assert result["participant_order"].tolist() == [1, 2]
+    assert result["selection_source"].tolist() == ["depth_chart", "unresolved"]
+    missing = result.iloc[1]
+    assert pd.isna(missing["player_id"])
+    assert missing["player_name"] == "Unidentified"
+    assert missing["depth_rank"] == 2
+    assert bool(missing["resolution_missing"])
+    assert "lacks a stable player ID" in missing["selection_notes"]
+
+
+@pytest.mark.parametrize("missing_id", ["", "   ", pd.NA])
+def test_direct_canonical_missing_ids_become_unresolved(missing_id):
+    depth = canonical(
+        [("KC", missing_id, "Unidentified", "RB", "2026-09-08", "RB", 1)]
+    )
+
+    result = resolve(depth=depth)
+
+    assert result["resolution_missing"].tolist() == [True]
+    assert result["selection_source"].tolist() == ["unresolved"]
+    assert pd.isna(result.loc[0, "player_id"])
+    assert result.loc[0, "player_name"] == "Unidentified"
+
+
+def test_direct_canonical_id_is_trimmed_before_resolution_and_duplicates():
+    depth = canonical(
+        [
+            ("KC", "  rb-1 ", "Runner", "RB", "2026-09-08", "RB", 1),
+            ("KC", "rb-1", "Runner", "RB", "2026-09-08", "RB", 1),
+        ]
+    )
+    original = depth.copy(deep=True)
+
+    result = resolve(depth=depth)
+
+    assert result["player_id"].tolist() == ["rb-1"]
+    assert result["resolution_missing"].tolist() == [False]
+    pd.testing.assert_frame_equal(depth, original)
+
+
+@pytest.mark.parametrize("invalid_id", [123, True])
+def test_direct_canonical_non_string_player_ids_raise(invalid_id):
+    depth = canonical(
+        [("KC", invalid_id, "Runner", "RB", "2026-09-08", "RB", 1)]
+    )
+
+    with pytest.raises(ValueError, match="player_id values must be strings"):
         resolve(depth=depth)
+
+
+def test_trimmed_equivalent_ids_with_conflicting_metadata_raise():
+    depth = canonical(
+        [
+            ("KC", "rb-1", "Runner", "RB", "2026-09-08", "RB", 1),
+            ("KC", " rb-1 ", "Changed", "RB", "2026-09-08", "RB", 2),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="Conflicting RB depth-chart participant"):
+        resolve(depth=depth)
+
+
+def test_missing_ids_in_old_or_unrequested_snapshots_do_not_block_resolution():
+    depth = canonical(
+        [
+            ("KC", pd.NA, "Old Unknown", "RB", "2026-09-07", "RB", 1),
+            ("KC", "rb-1", "Current", "RB", "2026-09-08", "RB", 1),
+            ("BUF", pd.NA, "Other Unknown", "RB", "2026-09-08", "RB", 1),
+        ]
+    )
+
+    result = resolve(teams("KC"), depth)
+
+    assert result["player_id"].tolist() == ["rb-1"]
+
+
+def test_all_selected_missing_id_rbs_remain_individual_diagnostics():
+    depth = canonical(
+        [
+            ("KC", pd.NA, "Alpha", "RB", "2026-09-08", "RB", 1),
+            ("KC", pd.NA, "Beta", "RB", "2026-09-08", "RB", 2),
+        ]
+    )
+
+    result = resolve(depth=depth)
+
+    assert result["player_name"].tolist() == ["Alpha", "Beta"]
+    assert result["participant_order"].tolist() == [1, 2]
+    assert result["resolution_missing"].tolist() == [True, True]
+    assert result["player_id"].isna().all()
 
 
 @pytest.mark.parametrize("rank_dtype", ["Int64", "Float64"])

@@ -248,6 +248,29 @@ def test_unresolved_and_missing_history_are_preserved_in_summary():
     assert bool(lac["rb_history_missing"]) is False
 
 
+def test_pipeline_keeps_missing_id_participants_out_of_rb_logs():
+    loaders = RecordingLoaders()
+    loaders.depth_charts[2026] = pd.DataFrame(
+        [
+            depth_row("2026-09-14", "KC", "rb_kc_1", "Kansas One", 1),
+            depth_row("2026-09-14", "KC", None, "Unknown Kansas", 2),
+            depth_row("2026-09-14", "LAC", "rb_lac", "Los Angeles", 1),
+        ],
+        columns=NFLVERSE_DATED_DEPTH_CHART_COLUMNS,
+    )
+
+    result = build(loaders, report_season=2026, report_week=2)
+
+    unknown = result.summary.loc[
+        result.summary["player_name"].eq("Unknown Kansas")
+    ].iloc[0]
+    assert pd.isna(unknown["player_id"])
+    assert bool(unknown["participant_resolution_missing"])
+    assert bool(unknown["rb_history_missing"])
+    assert "Unknown Kansas" not in set(result.rb_game_logs["player_name"])
+    assert result.rb_game_logs["player_id"].notna().all()
+
+
 def test_loaders_are_used_once_and_inputs_are_not_mutated():
     loaders = RecordingLoaders()
     stats = loaders.player_stats[2026].copy(deep=True)

@@ -181,7 +181,11 @@ def build_weekly_rb_matchup_report(
         rb_form_metrics.loc[:, RB_METRIC_COLUMNS],
         key_column="player_id",
         label="running-back form metrics",
-    ).drop(columns=["report_season", "report_week"])
+    )
+    rbs = rbs.loc[
+        rbs["player_id"].notna()
+        & rbs["player_id"].astype("string").str.strip().ne("")
+    ].drop(columns=["report_season", "report_week"])
     defenses = _validated_unique_metrics(
         rb_defense_matchup_metrics.loc[:, DEFENSE_METRIC_COLUMNS],
         key_column="defense",
@@ -224,8 +228,14 @@ def build_weekly_rb_matchup_report(
     result["participant_resolution_missing"] = result[
         "resolution_missing"
     ].fillna(False).astype(bool)
+    missing_identity_participant = (
+        result["participant_resolution_missing"]
+        & result["participant_order"].notna()
+        & result["player_id"].isna()
+    )
     result["rb_history_missing"] = (
-        ~result["participant_resolution_missing"] & rb_history_season.isna()
+        (~result["participant_resolution_missing"] & rb_history_season.isna())
+        | missing_identity_participant
     )
     result["defense_history_missing"] = defense_history_season.isna()
     result["participant_team_mismatch"] = (
@@ -333,7 +343,14 @@ def _validate_expected_duplicates(expected: pd.DataFrame) -> None:
     resolved = expected.loc[~resolution_missing].copy()
     unresolved = expected.loc[resolution_missing].copy()
 
-    mixed_teams = sorted(set(resolved["team"]).intersection(unresolved["team"]))
+    participant_unresolved = unresolved.loc[
+        unresolved["participant_order"].notna()
+        & unresolved["player_id"].isna()
+    ]
+    vague_unresolved = unresolved.loc[
+        ~unresolved.index.isin(participant_unresolved.index)
+    ]
+    mixed_teams = sorted(set(resolved["team"]).intersection(vague_unresolved["team"]))
     if mixed_teams:
         raise ValueError(
             "Expected running-back data cannot mix resolved and unresolved "
@@ -346,12 +363,12 @@ def _validate_expected_duplicates(expected: pd.DataFrame) -> None:
         "Expected running-back data contains conflicting participant rows",
     )
     _reject_conflicting_duplicates(
-        resolved,
+        expected.loc[expected["participant_order"].notna()],
         ["team", "participant_order"],
         "Expected running-back data contains conflicting participant order rows",
     )
     _reject_conflicting_duplicates(
-        unresolved,
+        vague_unresolved,
         ["team"],
         "Expected running-back data contains duplicate unresolved rows",
     )
