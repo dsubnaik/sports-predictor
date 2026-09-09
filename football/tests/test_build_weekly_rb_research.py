@@ -1,10 +1,16 @@
+from copy import deepcopy
+
 import pandas as pd
 import pytest
 
 from football.data.normalize_depth_charts import NFLVERSE_DATED_DEPTH_CHART_COLUMNS
 from football.features.defense_rb_game_logs import DEFENSE_RB_GAME_LOG_COLUMNS
 from football.features.running_back_usage import RUNNING_BACK_USAGE_COLUMNS
-from football.pipeline import WeeklyRBResearchResult, build_weekly_rb_research
+from football.pipeline import (
+    WeeklyPlayerPropOddsResult,
+    WeeklyRBResearchResult,
+    build_weekly_rb_research,
+)
 from football.reports.build_weekly_rb_matchup_report import OUTPUT_COLUMNS as REPORT_COLUMNS
 
 
@@ -310,7 +316,171 @@ def test_result_contract_and_determinism():
     second = build(RecordingLoaders(), report_season=2026, report_week=2)
 
     assert isinstance(first, WeeklyRBResearchResult)
-    assert set(first.__dict__) == {"summary", "rb_game_logs", "defense_game_logs"}
+    assert set(first.__dict__) == {"summary", "rb_game_logs", "defense_game_logs", "player_prop_odds"}
+    assert first.player_prop_odds is None
     pd.testing.assert_frame_equal(first.summary, second.summary)
     pd.testing.assert_frame_equal(first.rb_game_logs, second.rb_game_logs)
     pd.testing.assert_frame_equal(first.defense_game_logs, second.defense_game_logs)
+
+
+def _rush_event_payload():
+    return [{
+        "id": "odds-kc-lac",
+        "commence_time": "2026-09-18T00:20:00Z",
+        "home_team": "Kansas City Chiefs",
+        "away_team": "Los Angeles Chargers",
+    }]
+
+
+def _rush_prop_payload(player_names=("Kansas One", "Kansas Two"), bookmakers=True):
+    markets = []
+    for player_name in player_names:
+        markets.append({
+            "key": "player_rush_yds",
+            "last_update": "2026-09-17T12:01:00Z",
+            "outcomes": [
+                {"name": "Over", "description": player_name, "price": -110, "point": 55.5},
+                {"name": "Under", "description": player_name, "price": -115, "point": 55.5},
+            ],
+        })
+    return {
+        "id": "odds-kc-lac",
+        "commence_time": "2026-09-18T00:20:00Z",
+        "home_team": "Kansas City Chiefs",
+        "away_team": "Los Angeles Chargers",
+        "bookmakers": ([{
+            "key": "draftkings", "title": "DraftKings",
+            "last_update": "2026-09-17T12:00:00Z", "markets": markets,
+        }] if bookmakers else []),
+    }
+
+
+def test_rushing_props_are_disabled_by_default_without_odds_calls():
+    loaders = RecordingLoaders()
+    calls = []
+    result = build(
+        loaders,
+        report_season=2026,
+        report_week=2,
+        odds_event_fetcher=lambda **_kwargs: calls.append("events"),
+        odds_event_props_fetcher=lambda *_args, **_kwargs: calls.append("props"),
+    )
+    baseline = build(RecordingLoaders(), report_season=2026, report_week=2)
+
+    assert result.player_prop_odds is None
+    assert calls == []
+    pd.testing.assert_frame_equal(result.summary, baseline.summary)
+    pd.testing.assert_frame_equal(result.rb_game_logs, baseline.rb_game_logs)
+    pd.testing.assert_frame_equal(result.defense_game_logs, baseline.defense_game_logs)
+
+
+def test_enabled_rushing_props_include_starter_and_backup_without_summary_multiplication():
+    loaders = RecordingLoaders()
+    event_calls, prop_calls = [], []
+    event_payload = _rush_event_payload()
+    prop_payload = _rush_prop_payload()
+    event_before, prop_before = deepcopy(event_payload), deepcopy(prop_payload)
+
+    def fetch_events(*, api_key):
+        event_calls.append(api_key)
+        return event_payload
+
+    def fetch_props(event_id, market_keys, *, api_key):
+        prop_calls.append((event_id, market_keys, api_key))
+        return prop_payload
+
+    result = build(
+        loaders,
+        report_season=2026,
+        report_week=2,
+        include_player_props=True,
+        odds_api_key="test-key",
+        odds_event_fetcher=fetch_events,
+        odds_event_props_fetcher=fetch_props,
+    )
+
+    assert isinstance(result.player_prop_odds, WeeklyPlayerPropOddsResult)
+    assert loaders.schedule_seasons == [2026]
+    assert loaders.depth_chart_seasons == [2026]
+    assert loaders.player_stats_seasons == [2026]
+    assert event_calls == ["test-key"]
+    assert prop_calls == [("odds-kc-lac", ("player_rush_yds",), "test-key")]
+    odds = result.player_prop_odds.player_matched_odds
+    assert odds["market_key"].tolist() == ["player_rush_yds"] * 4
+    assert odds["player_id"].tolist() == ["rb_kc_1", "rb_kc_1", "rb_kc_2", "rb_kc_2"]
+    assert odds["event_match_status"].tolist() == ["matched"] * 4
+    assert odds["price"].tolist() == [-110, -115, -110, -115]
+    assert odds["bookmaker_last_update"].notna().all()
+    assert odds["market_last_update"].notna().all()
+    assert len(result.summary) == 3
+    assert event_payload == event_before
+    assert prop_payload == prop_before
+
+
+def test_enabled_rushing_props_keep_unresolved_rows_safe_and_no_bookmakers_empty():
+    loaders = RecordingLoaders()
+    loaders.depth_charts[2026] = pd.DataFrame(
+        [
+            depth_row("2026-09-14", "KC", "rb_kc_1", "Kansas One", 1),
+            depth_row("2026-09-14", "KC", None, "Unknown Kansas", 2),
+            depth_row("2026-09-14", "LAC", "rb_lac", "Los Angeles", 1),
+        ],
+        columns=NFLVERSE_DATED_DEPTH_CHART_COLUMNS,
+    )
+    unresolved = build(
+        loaders,
+        report_season=2026,
+        report_week=2,
+        include_player_props=True,
+        odds_event_fetcher=lambda **_kwargs: _rush_event_payload(),
+        odds_event_props_fetcher=lambda *_args, **_kwargs: _rush_prop_payload(("Unknown Kansas",)),
+    )
+    odds = unresolved.player_prop_odds.player_matched_odds
+    assert odds["match_status"].tolist() == ["unmatched", "unmatched"]
+    assert odds["player_id"].isna().all()
+    empty = build(
+        RecordingLoaders(),
+        report_season=2026,
+        report_week=2,
+        include_player_props=True,
+        odds_event_fetcher=lambda **_kwargs: _rush_event_payload(),
+        odds_event_props_fetcher=lambda *_args, **_kwargs: _rush_prop_payload(bookmakers=False),
+    )
+    assert empty.player_prop_odds.normalized_odds.empty
+    assert empty.player_prop_odds.player_matched_odds.empty
+    assert len(empty.summary) == 3
+
+
+def test_empty_schedule_never_fetches_odds_and_non_boolean_opt_in_fails_before_loaders():
+    loaders = RecordingLoaders()
+    calls = []
+    result = build(
+        loaders,
+        report_season=2026,
+        report_week=9,
+        include_player_props=True,
+        odds_event_fetcher=lambda **_kwargs: calls.append("events"),
+        odds_event_props_fetcher=lambda *_args, **_kwargs: calls.append("props"),
+    )
+    assert result.player_prop_odds is None
+    assert calls == []
+    assert loaders.player_stats_seasons == []
+    assert loaders.depth_chart_seasons == []
+
+    invalid = RecordingLoaders()
+    with pytest.raises(TypeError, match="include_player_props"):
+        build(invalid, report_season=2026, report_week=2, include_player_props=1)
+    assert invalid.schedule_seasons == []
+    assert invalid.player_stats_seasons == []
+    assert invalid.depth_chart_seasons == []
+
+
+def test_enabled_odds_failure_propagates_without_partial_result():
+    with pytest.raises(RuntimeError, match="event failure"):
+        build(
+            RecordingLoaders(),
+            report_season=2026,
+            report_week=2,
+            include_player_props=True,
+            odds_event_fetcher=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("event failure")),
+        )
