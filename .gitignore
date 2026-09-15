@@ -11,6 +11,12 @@ venv/
 # Generated datasets
 **/data/processed/
 
+# Local football decision store and SQLite sidecars
+/football/data/local/decisions.sqlite3
+/football/data/local/decisions.sqlite3-journal
+/football/data/local/decisions.sqlite3-wal
+/football/data/local/decisions.sqlite3-shm
+
 # Trained models
 **/models/
 
