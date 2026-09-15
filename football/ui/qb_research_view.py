@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any
 
 import pandas as pd
 
+from football.decisions import PendingDecision
 from football.pipeline.build_weekly_player_prop_odds import (
     WEEKLY_PLAYER_PROP_ODDS_COLUMNS,
     WeeklyPlayerPropOddsResult,
@@ -87,6 +89,18 @@ class MatchupOption:
 
     option_id: str
     label: str
+
+
+@dataclass(frozen=True)
+class QBDecisionOutcomeOption:
+    """One stable, matched passing-yard outcome eligible for recording."""
+
+    option_id: str
+    label: str
+
+
+class QBDecisionEntryValidationError(ValueError):
+    """Raised when displayed QB odds cannot safely form a decision snapshot."""
 
 
 def default_history_season(report_season: int, report_week: int) -> int:
@@ -213,6 +227,172 @@ def filter_selected_qb_passing_props(
         & (player_matched_odds["player_id"] == player_id)
     ].copy(deep=True)
     return rows.reset_index(drop=True)
+
+
+def build_qb_decision_outcome_options(
+    props: pd.DataFrame,
+) -> list[QBDecisionOutcomeOption]:
+    """Return deterministic, exact matched-outcome choices without mutating ``props``.
+
+    The option identity contains every raw odds value that becomes part of the
+    immutable decision snapshot.  Duplicate identities with different stored
+    snapshot values are rejected rather than resolved by input order.
+    """
+
+    _require_player_prop_schema(props)
+    choices: dict[str, tuple[tuple[str, ...], str]] = {}
+    for _, row in _eligible_qb_decision_rows(props).iterrows():
+        option_id = _qb_decision_option_id(row)
+        snapshot = _qb_snapshot_values(row)
+        label = _qb_decision_option_label(row)
+        existing = choices.get(option_id)
+        if existing is not None and existing[0] != snapshot:
+            raise QBDecisionEntryValidationError(
+                "conflicting matched odds rows share one decision selection identity"
+            )
+        if existing is None or label < existing[1]:
+            choices[option_id] = (snapshot, label)
+
+    return [
+        QBDecisionOutcomeOption(option_id=option_id, label=values[1])
+        for option_id, values in sorted(
+            choices.items(), key=lambda item: (item[1][1], item[0])
+        )
+    ]
+
+
+def build_qb_pending_decision(
+    props: pd.DataFrame,
+    matchup: pd.Series,
+    option_id: object,
+    odds_retrieved_at: object,
+    recorded_at: object,
+    research_notes: object | None = None,
+) -> PendingDecision:
+    """Create one QB pending-decision input from a selected displayed outcome.
+
+    This validates only the UI identity and matchup context boundary.  The
+    decision store remains authoritative for line, price, note, and timestamp
+    validation when the deliberately submitted snapshot is recorded.
+    """
+
+    _require_player_prop_schema(props)
+    if not isinstance(option_id, str) or not option_id:
+        raise QBDecisionEntryValidationError("a displayed passing-yard outcome must be selected")
+
+    matches = [
+        row.copy(deep=True)
+        for _, row in _eligible_qb_decision_rows(props).iterrows()
+        if _qb_decision_option_id(row) == option_id
+    ]
+    if not matches:
+        raise QBDecisionEntryValidationError(
+            "the selected passing-yard outcome is no longer available for this matchup"
+        )
+    snapshots = {_qb_snapshot_values(row) for row in matches}
+    if len(snapshots) != 1:
+        raise QBDecisionEntryValidationError(
+            "conflicting matched odds rows share one decision selection identity"
+        )
+    row = min(matches, key=_qb_row_sort_key)
+    context = _qb_decision_context(matchup, row)
+
+    return PendingDecision(
+        position="QB",
+        player_id=context["player_id"],
+        player_name=_required_context_text(row.get("nflverse_player_name"), "player_name"),
+        team=context["team"],
+        opponent=context["opponent"],
+        season=row.get("nflverse_season"),
+        week=row.get("nflverse_week"),
+        game_id=context["game_id"],
+        market_key="player_pass_yds",
+        sportsbook=_required_context_text(row.get("bookmaker_key"), "sportsbook"),
+        line=row.get("point"),
+        selection=_required_context_text(row.get("outcome_name"), "selection").lower(),
+        selected_price=row.get("price"),
+        odds_retrieved_at=odds_retrieved_at,
+        recorded_at=recorded_at,
+        research_notes=research_notes,
+    )
+
+
+def _eligible_qb_decision_rows(props: pd.DataFrame) -> pd.DataFrame:
+    return props.loc[
+        (props["market_key"] == "player_pass_yds")
+        & (props["event_match_status"] == "matched")
+        & (props["match_status"] == "matched")
+    ].copy(deep=True)
+
+
+def _qb_decision_option_id(row: pd.Series) -> str:
+    identity = [
+        _identity_value(row.get(column))
+        for column in (
+            "bookmaker_key", "nflverse_game_id", "player_id", "market_key",
+            "point", "outcome_name", "price",
+        )
+    ]
+    return json.dumps(identity, ensure_ascii=True, separators=(",", ":"))
+
+
+def _qb_snapshot_values(row: pd.Series) -> tuple[str, ...]:
+    return tuple(
+        _identity_value(row.get(column))
+        for column in (
+            "bookmaker_key", "nflverse_game_id", "player_id", "market_key",
+            "point", "outcome_name", "price", "nflverse_season", "nflverse_week",
+            "nflverse_player_name", "nflverse_team",
+        )
+    )
+
+
+def _qb_decision_option_label(row: pd.Series) -> str:
+    title = _display_value(row.get("bookmaker_title"), fallback=_identity_value(row.get("bookmaker_key")))
+    return (
+        f"{title} ({_identity_value(row.get('bookmaker_key'))}) | "
+        f"Passing yards {_identity_value(row.get('point'))} | "
+        f"{_identity_value(row.get('outcome_name'))} {_identity_value(row.get('price'))}"
+    )
+
+
+def _qb_row_sort_key(row: pd.Series) -> tuple[str, ...]:
+    return tuple(_identity_value(row.get(column)) for column in WEEKLY_PLAYER_PROP_ODDS_COLUMNS)
+
+
+def _qb_decision_context(matchup: pd.Series, row: pd.Series) -> dict[str, str]:
+    if not isinstance(matchup, pd.Series):
+        raise QBDecisionEntryValidationError("selected QB matchup is invalid")
+    game_id = _required_context_text(matchup.get("game_id"), "game_id")
+    player_id = _required_context_text(matchup.get("expected_player_id"), "player_id")
+    team = _required_context_text(matchup.get("team"), "team")
+    opponent = _required_context_text(matchup.get("opponent"), "opponent")
+
+    if _required_context_text(row.get("nflverse_game_id"), "game_id") != game_id:
+        raise QBDecisionEntryValidationError("selected odds no longer match the selected QB game")
+    if _required_context_text(row.get("player_id"), "player_id") != player_id:
+        raise QBDecisionEntryValidationError("selected odds no longer match the selected QB player")
+    if _required_context_text(row.get("nflverse_team"), "team") != team:
+        raise QBDecisionEntryValidationError("selected odds team does not match the selected QB context")
+    home_team = _required_context_text(row.get("nflverse_home_team"), "home team")
+    away_team = _required_context_text(row.get("nflverse_away_team"), "away team")
+    if {home_team, away_team} != {team, opponent}:
+        raise QBDecisionEntryValidationError("selected odds opponent does not match the selected QB context")
+    if _identity_value(row.get("nflverse_season")) != _identity_value(matchup.get("season")):
+        raise QBDecisionEntryValidationError("selected odds season does not match the selected QB context")
+    if _identity_value(row.get("nflverse_week")) != _identity_value(matchup.get("report_week")):
+        raise QBDecisionEntryValidationError("selected odds week does not match the selected QB context")
+    return {"game_id": game_id, "player_id": player_id, "team": team, "opponent": opponent}
+
+
+def _required_context_text(value: object, field: str) -> str:
+    if _blank_value(value):
+        raise QBDecisionEntryValidationError(f"selected odds {field} must be nonblank")
+    return str(value).strip()
+
+
+def _identity_value(value: object) -> str:
+    return "<missing>" if pd.isna(value) else str(value).strip()
 
 
 def prepare_passing_prop_display(props: pd.DataFrame) -> pd.DataFrame:

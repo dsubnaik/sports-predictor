@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+from datetime import datetime, timezone
 
 from football.pipeline.build_weekly_player_prop_odds import (
     WEEKLY_PLAYER_PROP_ODDS_COLUMNS,
@@ -8,6 +9,8 @@ from football.ui.qb_research_view import (
     DEFENSIVE_MATCHUP_RANK_HELP,
     PASSING_PROP_DISPLAY_COLUMNS,
     build_matchup_options,
+    build_qb_decision_outcome_options,
+    build_qb_pending_decision,
     build_selected_qb_prop_warnings,
     default_history_season,
     filter_defense_game_log,
@@ -19,6 +22,7 @@ from football.ui.qb_research_view import (
     prepare_defense_log_display,
     prepare_qb_log_display,
     prepare_summary_display,
+    QBDecisionEntryValidationError,
 )
 
 
@@ -395,3 +399,72 @@ def test_retrieval_time_format_is_deterministic_and_requires_timezone():
     assert format_odds_retrieval_time("2026-09-10T12:34:56-05:00") == "2026-09-10 17:34 UTC"
     with pytest.raises(ValueError, match="timezone-aware"):
         format_odds_retrieval_time("2026-09-10T12:34:56")
+
+
+def test_qb_decision_options_and_snapshot_use_exact_matched_raw_values_without_mutation():
+    matchup = make_summary().loc[0]
+    props = make_player_matched_odds([
+        {},
+        {"outcome_name": "Under", "price": -115},
+        {"bookmaker_key": "fan", "bookmaker_title": "FanDuel", "point": 251.5, "price": 105},
+    ])
+    before = props.copy(deep=True)
+
+    options = build_qb_decision_outcome_options(props)
+    over = next(option for option in options if "draftkings" in option.label and "Over -110" in option.label)
+    decision = build_qb_pending_decision(
+        props,
+        matchup,
+        over.option_id,
+        datetime(2026, 9, 10, 12, tzinfo=timezone.utc),
+        datetime(2026, 9, 10, 13, tzinfo=timezone.utc),
+        "  matchup note  ",
+    )
+
+    assert decision.position == "QB"
+    assert decision.market_key == "player_pass_yds"
+    assert decision.game_id == "2026_01_KC_LAC"
+    assert decision.player_id == "same_name_kc"
+    assert decision.player_name == "Alex Smith"
+    assert decision.team == "KC"
+    assert decision.opponent == "LAC"
+    assert decision.season == 2026
+    assert decision.week == 1
+    assert decision.sportsbook == "draftkings"
+    assert decision.line == 250.5
+    assert decision.selection == "over"
+    assert decision.selected_price == -110
+    assert decision.research_notes == "  matchup note  "
+    pd.testing.assert_frame_equal(props, before)
+
+
+def test_qb_decision_options_keep_over_and_under_distinct_and_reject_context_mismatches():
+    matchup = make_summary().loc[0]
+    props = make_player_matched_odds()
+    options = build_qb_decision_outcome_options(props)
+    assert len(options) == 2
+    assert len({option.option_id for option in options}) == 2
+
+    changed = matchup.copy()
+    changed["opponent"] = "DEN"
+    with pytest.raises(QBDecisionEntryValidationError, match="opponent"):
+        build_qb_pending_decision(
+            props, changed, options[0].option_id,
+            datetime(2026, 9, 10, 12, tzinfo=timezone.utc),
+            datetime(2026, 9, 10, 13, tzinfo=timezone.utc),
+        )
+
+
+def test_qb_decision_options_exclude_unresolved_rows_and_reject_conflicting_identity():
+    props = make_player_matched_odds([
+        {"event_match_status": "unmatched"},
+        {"match_status": "ambiguous", "outcome_name": "Under"},
+    ])
+    assert build_qb_decision_outcome_options(props) == []
+
+    conflicting = make_player_matched_odds([
+        {},
+        {"nflverse_player_name": "Different Name"},
+    ])
+    with pytest.raises(QBDecisionEntryValidationError, match="conflicting"):
+        build_qb_decision_outcome_options(conflicting)
