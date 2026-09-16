@@ -9,7 +9,14 @@ import streamlit as st
 
 from football.decision_database import open_local_decision_database
 from football.decisions import DecisionStoreError, StoredDecision, list_decisions
+from football.results.decision_performance import DecisionPerformanceError
+from football.results.decision_performance_breakdowns import (
+    DecisionPerformanceBreakdownReport,
+    build_decision_performance_breakdowns,
+)
 from football.ui.decision_history_view import (
+    decision_performance_breakdown_rows,
+    decision_performance_summary_rows,
     decision_history_filter_options,
     decision_history_rows,
     filter_decision_history,
@@ -59,6 +66,12 @@ def render_decision_history_page(
     if not filtered:
         ui.info("No decisions match these filters.")
         return
+    try:
+        performance = build_decision_performance_breakdowns(filtered)
+    except DecisionPerformanceError:
+        ui.error("Could not calculate performance for the loaded decision history.")
+        return
+    _render_performance(ui, performance)
     ui.dataframe(decision_history_rows(filtered), use_container_width=True, hide_index=True)
 
 
@@ -94,3 +107,31 @@ def _render_filters(ui: Any, options: dict[str, tuple[object, ...]]) -> tuple[ob
     with columns[5]:
         status = ui.selectbox("Result", options["status"], key="football_history_status")
     return position, market_key, season, week, sportsbook, status
+
+
+def _render_performance(ui: Any, report: DecisionPerformanceBreakdownReport) -> None:
+    """Render display-only performance for exactly the current filtered tuple."""
+
+    ui.subheader("Performance — Current filters")
+    ui.info(
+        "Hypothetical flat-stake units apply to recorded research decisions, not verified placed wagers."
+    )
+    ui.caption("Pending decisions have no realized unit return. Hit rate excludes pending decisions and pushes.")
+    ui.dataframe(
+        decision_performance_summary_rows(report.overall),
+        use_container_width=True,
+        hide_index=True,
+    )
+    for label, groups in (
+        ("By Position", report.position_groups),
+        ("By Market", report.market_key_groups),
+        ("By Season / Week", report.season_week_groups),
+        ("By Sportsbook", report.sportsbook_groups),
+    ):
+        if groups:
+            ui.caption(label)
+            ui.dataframe(
+                decision_performance_breakdown_rows(groups),
+                use_container_width=True,
+                hide_index=True,
+            )
