@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Context, Decimal, localcontext
 
 from football.decisions import StoredDecision
+from football.results.decision_performance import DecisionPerformanceSummary
+from football.results.decision_performance_breakdowns import (
+    DecisionPerformanceGroup,
+    SeasonWeekPerformanceKey,
+)
 
 
 ALL_FILTER = "All"
@@ -94,5 +100,59 @@ def decision_history_rows(decisions: tuple[StoredDecision, ...]) -> list[dict[st
     ]
 
 
+def decision_performance_summary_rows(
+    summary: DecisionPerformanceSummary,
+) -> list[dict[str, object]]:
+    """Return one display-only performance row for the current filters."""
+
+    return [{
+        "Scope": "Current filters",
+        "Decisions": summary.total_decisions,
+        "Pending": summary.pending_count,
+        "Wins": summary.win_count,
+        "Losses": summary.loss_count,
+        "Pushes": summary.push_count,
+        "Settled": summary.settled_count,
+        "Graded": summary.graded_count,
+        "Hit Rate": _hit_rate(summary.hit_rate),
+        "Hypothetical Flat-Stake Units": _units(summary.net_units),
+    }]
+
+
+def decision_performance_breakdown_rows(
+    groups: tuple[DecisionPerformanceGroup, ...],
+) -> list[dict[str, object]]:
+    """Return display-only rows while retaining the report's group order."""
+
+    return [{
+        "Group": _group_key(group.key),
+        "Decisions": group.summary.total_decisions,
+        "Pending": group.summary.pending_count,
+        "Wins": group.summary.win_count,
+        "Losses": group.summary.loss_count,
+        "Pushes": group.summary.push_count,
+        "Hit Rate": _hit_rate(group.summary.hit_rate),
+        "Hypothetical Flat-Stake Units": _units(group.summary.net_units),
+    } for group in groups]
+
+
 def _timestamp(value: datetime) -> str:
     return value.isoformat().replace("+00:00", "Z")
+
+
+def _hit_rate(value: Decimal | None) -> str:
+    if value is None:
+        return "N/A (no wins or losses)"
+    with localcontext(Context(prec=50)):
+        return f"{format(value * Decimal(100), '.1f')}%"
+
+
+def _units(value: Decimal) -> str:
+    with localcontext(Context(prec=50)):
+        return format(value, ".2f")
+
+
+def _group_key(value: str | SeasonWeekPerformanceKey) -> str:
+    if isinstance(value, SeasonWeekPerformanceKey):
+        return f"{value.season} Week {value.week}"
+    return value
