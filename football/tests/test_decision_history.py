@@ -10,11 +10,19 @@ import pytest
 import football.ui.decision_history_page as history_page
 from football.decision_database import open_local_decision_database
 from football.decisions import DecisionStoreError, PendingDecision, record_decision, settle_decision
+from football.results.batch_settlement import BatchSettlementEntry, BatchSettlementReport
+from football.results.completed_games import CompletedGameDiagnostic, CompletedGameReport
+from football.results.local_settlement_runner import LocalSettlementRunReport
+from football.results.settlement_workflow import DecisionSettlementWorkflowReport
 from football.ui.decision_history_view import (
     ALL_FILTER,
+    completed_game_diagnostic_rows,
     decision_history_filter_options,
     decision_history_rows,
     filter_decision_history,
+    pending_decision_seasons,
+    settled_settlement_rows,
+    unresolved_settlement_rows,
 )
 
 
@@ -30,8 +38,10 @@ class _Context:
 
 
 class FakeStreamlit:
-    def __init__(self, *, load=False, state=None):
+    def __init__(self, *, load=False, settle=False, acknowledged=False, state=None):
         self.load = load
+        self.settle = settle
+        self.acknowledged = acknowledged
         self.session_state = {} if state is None else state
         self.messages = []
         self.dataframes = []
@@ -40,8 +50,13 @@ class FakeStreamlit:
     def subheader(self, value): self.messages.append(("subheader", value))
     def info(self, value): self.messages.append(("info", value))
     def caption(self, value): self.messages.append(("caption", value))
+    def warning(self, value): self.messages.append(("warning", value))
     def error(self, value): self.messages.append(("error", value))
-    def button(self, label, **kwargs): return self.load
+    def success(self, value): self.messages.append(("success", value))
+    def button(self, label, **kwargs): return self.load if label == "Load Decision History" else False
+    def form(self, _key): return _Context()
+    def checkbox(self, _label, key): return self.session_state.get(key, self.acknowledged)
+    def form_submit_button(self, label, **kwargs): return self.settle if label == "Settle Pending Decisions" else False
     def columns(self, count): return [_Context() for _ in range(count)]
     def selectbox(self, label, options, key): return self.session_state.get(key, options[0])
     def dataframe(self, value, **kwargs): self.dataframes.append(value)
@@ -59,6 +74,34 @@ def _breakdown_rows(ui, first_key):
     return next(
         rows for rows in ui.dataframes
         if rows and rows[0].get("Group") == first_key
+    )
+
+
+def _executed_settlement_report(*, mapping=True, unresolved=True):
+    diagnostics = (
+        CompletedGameDiagnostic("event-unmatched", "unmatched", "No schedule game matched."),
+    ) if mapping else ()
+    entries = (
+        BatchSettlementEntry(
+            decision_id="pending-qb", position="QB", market_key="player_pass_yds",
+            season=2026, week=1, game_id="2026_01_KC_LAC", player_id="qb-pending-qb",
+            batch_status="settled", match_status="matched", actual_result=Decimal("275"),
+            decision_status="win", diagnostic=None,
+        ),
+        BatchSettlementEntry(
+            decision_id="missing-rb", position="RB", market_key="player_rush_yds",
+            season=2026, week=1, game_id="2026_01_KC_LAC", player_id="rb-missing-rb",
+            batch_status="unresolved", match_status="player_result_missing", actual_result=None,
+            decision_status="pending", diagnostic="No normalized player result exists for the completed game.",
+        ),
+    ) if unresolved else ()
+    return LocalSettlementRunReport(
+        season=2026,
+        outcome="executed",
+        workflow_report=DecisionSettlementWorkflowReport(
+            CompletedGameReport(("2026_01_KC_LAC",), diagnostics),
+            BatchSettlementReport(entries),
+        ),
     )
 
 
@@ -297,8 +340,219 @@ def test_pending_and_zero_net_performance_formatting_and_validation_error_are_sa
     assert state["football_qb_research_result"] == "qb"
 
 
+def test_settlement_controls_do_not_run_before_history_load_or_on_history_load(tmp_path):
+    calls = []
+    before_load = FakeStreamlit()
+    history_page.render_decision_history_page(
+        streamlit_module=before_load,
+        database_opener=lambda: pytest.fail("database opened before Load"),
+        settlement_runner=lambda season: calls.append(season),
+    )
+    assert not calls
+
+    path = tmp_path / "history.sqlite3"
+    _write_pending_to_path(path)
+    loaded = FakeStreamlit(load=True)
+    history_page.render_decision_history_page(
+        streamlit_module=loaded,
+        database_opener=lambda: open_local_decision_database(path),
+        settlement_runner=lambda season: calls.append(season),
+    )
+    assert not calls
+
+
+def test_settlement_requires_acknowledgement_and_filter_reruns_do_not_call_runner(tmp_path):
+    path = tmp_path / "history.sqlite3"
+    _write_pending_to_path(path)
+    state = {"football_history_position": "QB"}
+    history_page.render_decision_history_page(
+        streamlit_module=FakeStreamlit(load=True, state=state),
+        database_opener=lambda: open_local_decision_database(path),
+        settlement_runner=pytest.fail,
+    )
+
+    calls = []
+    unacknowledged = FakeStreamlit(settle=True, acknowledged=False, state=state)
+    history_page.render_decision_history_page(
+        streamlit_module=unacknowledged,
+        database_opener=lambda: pytest.fail("settlement form opened history database"),
+        settlement_runner=lambda season: calls.append(season),
+    )
+    assert not calls
+    assert any("Acknowledge" in message for kind, message in unacknowledged.messages if kind == "error")
+
+    rerun = FakeStreamlit(state=state)
+    history_page.render_decision_history_page(
+        streamlit_module=rerun,
+        database_opener=lambda: pytest.fail("filter rerun opened history database"),
+        settlement_runner=lambda season: calls.append(season),
+    )
+    assert not calls
+
+
+def test_confirmed_settlement_runs_once_refreshes_history_and_renders_distinct_diagnostics(tmp_path):
+    path = tmp_path / "history.sqlite3"
+    _write_pending_to_path(path, decision_id="pending-qb")
+    opened = []
+    calls = []
+
+    def opener():
+        connection = open_local_decision_database(path)
+        opened.append(connection)
+        return connection
+
+    def runner(season):
+        calls.append(season)
+        return _executed_settlement_report()
+
+    state = {"football_history_settlement_acknowledged": True}
+    ui = FakeStreamlit(load=True, settle=True, state=state)
+    history_page.render_decision_history_page(
+        streamlit_module=ui,
+        database_opener=opener,
+        settlement_runner=runner,
+    )
+    assert calls == [2026]
+    assert len(opened) == 2  # Initial load and one local post-settlement refresh.
+    assert (
+        "success",
+        "Settlement run completed: 1 settled or confirmed; 1 unresolved.",
+    ) in ui.messages
+    assert ("caption", "Completed-event mapping diagnostics") in ui.messages
+    assert ("caption", "Settled or confirmed decisions") in ui.messages
+    assert ("caption", "Unresolved decision diagnostics") in ui.messages
+    assert any("never assumed to be zero" in message for kind, message in ui.messages if kind == "info")
+    assert any(rows and "Provider Event ID" in rows[0] for rows in ui.dataframes)
+    assert any(rows and rows[0].get("Decision ID") == "pending-qb" and "Decision Status" in rows[0] for rows in ui.dataframes)
+    assert any(rows and rows[0].get("Decision ID") == "missing-rb" for rows in ui.dataframes)
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+
+
+def test_no_work_message_never_claims_a_live_scores_request(tmp_path):
+    path = tmp_path / "history.sqlite3"
+    _write_pending_to_path(path)
+    calls = []
+    report = LocalSettlementRunReport(2026, "no_pending_decisions", None)
+    ui = FakeStreamlit(load=True, settle=True, acknowledged=True)
+    history_page.render_decision_history_page(
+        streamlit_module=ui,
+        database_opener=lambda: open_local_decision_database(path),
+        settlement_runner=lambda season: calls.append(season) or report,
+    )
+    assert calls == [2026]
+    assert any(
+        "no live inputs or Odds API scores request was made" in message
+        for kind, message in ui.messages if kind == "info"
+    )
+
+
+def test_prior_executed_report_does_not_trigger_settlement_on_ordinary_rerun(tmp_path):
+    path = tmp_path / "history.sqlite3"
+    stored = _write_pending_to_path(path)
+    state = {
+        "football_decision_history_decisions": (stored,),
+        "football_decision_history_settlement_report": _executed_settlement_report(),
+    }
+    ui = FakeStreamlit(state=state)
+    history_page.render_decision_history_page(
+        streamlit_module=ui,
+        database_opener=lambda: pytest.fail("ordinary rerun opened history database"),
+        settlement_runner=pytest.fail,
+    )
+    assert ("caption", "Most recent deliberate settlement run (not a new settlement).") in ui.messages
+
+
+def test_repeated_deliberate_submissions_are_separate_runner_invocations(tmp_path):
+    path = tmp_path / "history.sqlite3"
+    stored = _write_pending_to_path(path)
+    state = {"football_decision_history_decisions": (stored,)}
+    calls = []
+    no_work = LocalSettlementRunReport(2026, "no_pending_decisions", None)
+    for _ in range(2):
+        history_page.render_decision_history_page(
+            streamlit_module=FakeStreamlit(settle=True, acknowledged=True, state=state),
+            database_opener=lambda: pytest.fail("no-work settlement should not refresh history"),
+            settlement_runner=lambda season: calls.append(season) or no_work,
+        )
+    assert calls == [2026, 2026]
+
+
+def test_settlement_failure_preserves_loaded_history_state_and_reports_no_partial_success(tmp_path):
+    path = tmp_path / "history.sqlite3"
+    stored = _write_pending_to_path(path)
+    state = {
+        "football_decision_history_decisions": (stored,),
+        "football_qb_research_result": "qb",
+        "football_rb_research_result": "rb",
+    }
+    ui = FakeStreamlit(settle=True, acknowledged=True, state=state)
+    history_page.render_decision_history_page(
+        streamlit_module=ui,
+        database_opener=lambda: pytest.fail("failed settlement opened history database"),
+        settlement_runner=lambda _season: (_ for _ in ()).throw(DecisionStoreError("conflict")),
+    )
+    assert state["football_decision_history_decisions"] == (stored,)
+    assert state["football_qb_research_result"] == "qb"
+    assert state["football_rb_research_result"] == "rb"
+    assert ("error", "Could not settle pending decisions. History was left unchanged.") in ui.messages
+
+
+def test_failed_post_settlement_refresh_preserves_history_and_marks_it_stale(tmp_path, monkeypatch):
+    stored = _write_pending(tmp_path)
+    state = {"football_decision_history_decisions": (stored,)}
+    connection = sqlite3.connect(":memory:")
+    monkeypatch.setattr(
+        history_page,
+        "list_decisions",
+        lambda _connection: (_ for _ in ()).throw(DecisionStoreError("read failure")),
+    )
+    ui = FakeStreamlit(settle=True, acknowledged=True, state=state)
+    history_page.render_decision_history_page(
+        streamlit_module=ui,
+        database_opener=lambda: connection,
+        settlement_runner=lambda _season: _executed_settlement_report(mapping=False, unresolved=False),
+    )
+    assert state["football_decision_history_decisions"] == (stored,)
+    assert state["football_decision_history_may_be_stale"] is True
+    assert any("may be stale" in message for kind, message in ui.messages if kind == "warning")
+    with pytest.raises(sqlite3.ProgrammingError):
+        connection.execute("SELECT 1")
+
+
+def test_pending_season_and_diagnostic_view_helpers_are_deterministic():
+    qb = _pending("qb", season=2026)
+    rb = _pending("rb", position="RB", season=2025)
+    settled = replace(qb, decision_id="settled", status="win", actual_result=Decimal("251"), settled_at=TIME + timedelta(hours=2))
+    assert pending_decision_seasons((qb, rb, settled)) == (2025, 2026)
+    report = _executed_settlement_report()
+    assert completed_game_diagnostic_rows(report.workflow_report.completed_game_report.diagnostics) == [{
+        "Provider Event ID": "event-unmatched", "Match Status": "unmatched", "Diagnostic": "No schedule game matched.",
+    }]
+    unresolved = unresolved_settlement_rows(report.workflow_report.batch_settlement_report.unresolved_entries)
+    assert unresolved[0]["Decision ID"] == "missing-rb"
+    assert unresolved[0]["Diagnostic"].startswith("No normalized player result")
+    settled_rows = settled_settlement_rows(report.workflow_report.batch_settlement_report.settled_entries)
+    assert settled_rows == [{
+        "Decision ID": "pending-qb", "Position": "QB", "Market": "player_pass_yds",
+        "Game ID": "2026_01_KC_LAC", "Player ID": "qb-pending-qb",
+        "Actual Result": "275", "Decision Status": "win",
+    }]
+
+
 def _write_pending(tmp_path, decision_id="pending"):
     path = tmp_path / f"{decision_id}.sqlite3"
+    connection = open_local_decision_database(path)
+    try:
+        stored = record_decision(connection, _pending(decision_id))
+        connection.commit()
+        return stored
+    finally:
+        connection.close()
+
+
+def _write_pending_to_path(path, decision_id="pending-qb"):
     connection = open_local_decision_database(path)
     try:
         stored = record_decision(connection, _pending(decision_id))

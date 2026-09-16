@@ -6,6 +6,8 @@ from datetime import datetime
 from decimal import Context, Decimal, localcontext
 
 from football.decisions import StoredDecision
+from football.results.batch_settlement import BatchSettlementEntry
+from football.results.completed_games import CompletedGameDiagnostic
 from football.results.decision_performance import DecisionPerformanceSummary
 from football.results.decision_performance_breakdowns import (
     DecisionPerformanceGroup,
@@ -15,6 +17,65 @@ from football.results.decision_performance_breakdowns import (
 
 ALL_FILTER = "All"
 STATUS_FILTERS = (ALL_FILTER, "pending", "win", "loss", "push")
+
+
+def pending_decision_seasons(decisions: tuple[StoredDecision, ...]) -> tuple[int, ...]:
+    """Return sorted seasons with at least one loaded pending decision."""
+
+    return tuple(sorted({decision.season for decision in decisions if decision.status == "pending"}))
+
+
+def completed_game_diagnostic_rows(
+    diagnostics: tuple[CompletedGameDiagnostic, ...],
+) -> list[dict[str, str]]:
+    """Return mapping diagnostics without interpreting provider finality."""
+
+    return [
+        {
+            "Provider Event ID": diagnostic.provider_event_id,
+            "Match Status": diagnostic.match_status,
+            "Diagnostic": diagnostic.diagnostic,
+        }
+        for diagnostic in diagnostics
+    ]
+
+
+def unresolved_settlement_rows(
+    entries: tuple[BatchSettlementEntry, ...],
+) -> list[dict[str, object]]:
+    """Return unresolved decision diagnostics in existing batch-report order."""
+
+    return [
+        {
+            "Decision ID": entry.decision_id,
+            "Position": entry.position,
+            "Market": entry.market_key,
+            "Game ID": entry.game_id,
+            "Player ID": entry.player_id,
+            "Match Status": entry.match_status,
+            "Diagnostic": entry.diagnostic or "",
+        }
+        for entry in entries
+    ]
+
+
+def settled_settlement_rows(
+    entries: tuple[BatchSettlementEntry, ...],
+) -> list[dict[str, object]]:
+    """Return settled-or-confirmed entries in existing batch-report order."""
+
+    return [
+        {
+            "Decision ID": entry.decision_id,
+            "Position": entry.position,
+            "Market": entry.market_key,
+            "Game ID": entry.game_id,
+            "Player ID": entry.player_id,
+            "Actual Result": format(entry.actual_result, "f"),
+            "Decision Status": entry.decision_status,
+        }
+        for entry in entries
+    ]
 
 
 def decision_history_filter_options(
