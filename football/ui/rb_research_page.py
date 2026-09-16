@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import sqlite3
 from typing import Any, Callable
 from urllib.error import URLError
 
@@ -15,9 +16,19 @@ except ImportError:  # pragma: no cover - requests is an app dependency.
     RequestException = OSError
 
 from football.pipeline import WeeklyRBResearchResult, build_weekly_rb_research
+from football.decision_database import open_local_decision_database
+from football.decisions import (
+    DecisionStoreError,
+    DecisionValidationError,
+    DuplicateDecisionError,
+    record_decision,
+)
 from football.ui.rb_research_view import (
     DEFENSIVE_MATCHUP_RANK_HELP,
+    RBDecisionEntryValidationError,
     build_participant_options,
+    build_rb_decision_outcome_options,
+    build_rb_pending_decision,
     build_selected_rb_prop_warnings,
     build_warning_counts,
     default_history_season,
@@ -56,10 +67,14 @@ def render_football_rb_research_page(
     *,
     streamlit_module: Any | None = None,
     report_loader: Callable[..., WeeklyRBResearchResult] = load_rb_research,
+    database_opener: Callable[[], sqlite3.Connection] = open_local_decision_database,
+    clock: Callable[[], object] | None = None,
+    id_factory: Callable[[], object] | None = None,
 ) -> None:
     """Render the RB research page; optional dependencies support isolated UI tests."""
 
     ui = streamlit_module or st
+    selected_clock = clock or (lambda: datetime.now(timezone.utc))
     ui.title("Football RB Research")
     ui.info("Generate research context for expected backfield participants, not predictions.")
 
@@ -175,6 +190,16 @@ def render_football_rb_research_page(
             "sportsbook market-update times are shown in the table."
         )
 
+    _render_rb_decision_entry(
+        ui,
+        selected_props,
+        participant,
+        retrieval_time,
+        database_opener=database_opener,
+        clock=selected_clock,
+        id_factory=id_factory,
+    )
+
     rb_log = filter_rb_game_log(result.rb_game_logs, participant)
     defense_log = filter_defense_game_log(result.defense_game_logs, participant)
     ui.subheader("Selected RB Historical Game Log")
@@ -188,6 +213,83 @@ def render_football_rb_research_page(
     else:
         ui.dataframe(prepare_defense_log_display(defense_log), use_container_width=True, hide_index=True)
     ui.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
+
+
+def _render_rb_decision_entry(
+    ui: Any,
+    selected_props: Any,
+    participant: Any,
+    retrieval_time: object | None,
+    *,
+    database_opener: Callable[[], sqlite3.Connection],
+    clock: Callable[[], object],
+    id_factory: Callable[[], object] | None,
+) -> None:
+    """Render the separate deliberate action for one displayed RB outcome."""
+
+    if selected_props is None or selected_props.empty:
+        return
+    try:
+        options = build_rb_decision_outcome_options(selected_props)
+    except RBDecisionEntryValidationError as error:
+        ui.error(f"Rushing-yard decision entry is unavailable: {error}")
+        return
+    if not options:
+        return
+
+    option_by_id = {option.option_id: option for option in options}
+    ui.subheader("Record RB Rushing-Yards Decision")
+    with ui.form("football_rb_decision_entry_form"):
+        selected_option_id = ui.selectbox(
+            "Exact displayed outcome",
+            list(option_by_id),
+            format_func=lambda value: option_by_id[value].label,
+            key="football_rb_decision_selected_outcome",
+        )
+        research_notes = ui.text_area(
+            "Research notes (optional)",
+            key="football_rb_decision_research_notes",
+        )
+        submitted = ui.form_submit_button("Record Decision", type="primary")
+    if not submitted:
+        return
+
+    try:
+        decision = build_rb_pending_decision(
+            selected_props,
+            participant,
+            selected_option_id,
+            retrieval_time,
+            clock(),
+            research_notes,
+        )
+    except RBDecisionEntryValidationError as error:
+        ui.error(f"Could not record the displayed outcome: {error}")
+        return
+
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = database_opener()
+        if id_factory is None:
+            stored = record_decision(connection, decision)
+        else:
+            stored = record_decision(connection, decision, id_factory=id_factory)
+    except DuplicateDecisionError:
+        ui.info("This exact sportsbook snapshot was already recorded.")
+    except DecisionValidationError as error:
+        ui.error(f"Could not record the displayed outcome: {error}")
+    except DecisionStoreError:
+        ui.error("Could not record the displayed outcome because the decision store rejected it.")
+    except (OSError, sqlite3.Error):
+        ui.error("Could not open or write the local decision database.")
+    else:
+        ui.success(
+            f"Recorded {stored.decision_id}: {stored.sportsbook} {stored.line} "
+            f"{stored.selection} {stored.selected_price}."
+        )
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 def _render_warning_summary(ui: Any, summary: Any) -> None:
