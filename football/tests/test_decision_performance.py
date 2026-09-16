@@ -11,6 +11,7 @@ from football.results.decision_performance import (
     DecisionPerformanceConflictError,
     DecisionPerformanceValidationError,
     summarize_decision_performance,
+    validated_unique_decisions,
 )
 
 
@@ -143,6 +144,7 @@ def test_selected_price_is_authoritative_and_distinct_ids_count_separately():
 def test_identical_duplicate_ids_collapse_and_conflicting_ids_raise_independent_of_order():
     first = settled("same", selected_price=100)
     assert summarize_decision_performance([first, first]).total_decisions == 1
+    assert validated_unique_decisions([first, first]) == (first,)
     conflicting = replace(first, selected_price=150)
     for values in ([first, conflicting], [conflicting, first]):
         with pytest.raises(DecisionPerformanceConflictError, match="conflicting decisions share decision_id: same"):
