@@ -64,9 +64,7 @@ def summarize_decision_performance(
     ambient Decimal context. Individual returns are never quantized.
     """
 
-    unique_decisions = _unique_decisions(decisions)
-    for decision in unique_decisions:
-        _validate_decision(decision)
+    unique_decisions = validated_unique_decisions(decisions)
 
     pending_count = sum(decision.status == "pending" for decision in unique_decisions)
     win_count = sum(decision.status == "win" for decision in unique_decisions)
@@ -91,7 +89,16 @@ def summarize_decision_performance(
     )
 
 
-def _unique_decisions(decisions: Iterable[StoredDecision]) -> tuple[StoredDecision, ...]:
+def validated_unique_decisions(
+    decisions: Iterable[StoredDecision],
+) -> tuple[StoredDecision, ...]:
+    """Return validated decisions once each, sorted by ``decision_id``.
+
+    Identical repeated decision IDs collapse. Differing representations that
+    share an ID raise ``DecisionPerformanceConflictError``. This public helper
+    lets pure reports reuse exactly the same input boundary as the summary.
+    """
+
     if isinstance(decisions, (str, bytes)):
         raise DecisionPerformanceValidationError(
             "decisions must be a non-string iterable of StoredDecision objects"
@@ -119,7 +126,10 @@ def _unique_decisions(decisions: Iterable[StoredDecision]) -> tuple[StoredDecisi
                 f"conflicting decisions share decision_id: {decision.decision_id}"
             )
         by_id[decision.decision_id] = decision
-    return tuple(by_id[decision_id] for decision_id in sorted(by_id))
+    unique_decisions = tuple(by_id[decision_id] for decision_id in sorted(by_id))
+    for decision in unique_decisions:
+        _validate_decision(decision)
+    return unique_decisions
 
 
 def _validate_decision(decision: StoredDecision) -> None:
