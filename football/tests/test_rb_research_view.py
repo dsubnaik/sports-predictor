@@ -1,11 +1,16 @@
 """Tests for pure RB Streamlit display preparation helpers."""
 
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
+import sqlite3
 
 import pandas as pd
 import pytest
 
 from football.pipeline import WeeklyRBResearchResult
+from football.decision_database import open_local_decision_database
+from football.decisions import get_decision, list_decisions
 from football.pipeline.build_weekly_player_prop_odds import (
     WEEKLY_PLAYER_PROP_ODDS_COLUMNS,
 )
@@ -13,6 +18,8 @@ from football.ui.rb_research_page import render_football_rb_research_page
 from football.ui.rb_research_view import (
     DEFENSIVE_MATCHUP_RANK_HELP,
     build_participant_options,
+    build_rb_decision_outcome_options,
+    build_rb_pending_decision,
     build_selected_rb_prop_warnings,
     build_warning_counts,
     default_history_season,
@@ -26,6 +33,7 @@ from football.ui.rb_research_view import (
     prepare_rushing_prop_display,
     prepare_summary_display,
     RUSHING_PROP_DISPLAY_COLUMNS,
+    RBDecisionEntryValidationError,
 )
 
 
@@ -500,3 +508,184 @@ def test_rushing_prop_warnings_are_game_scoped_and_retrieval_time_is_determinist
     assert format_odds_retrieval_time("2026-09-10T12:34:56-05:00") == "2026-09-10 17:34 UTC"
     with pytest.raises(ValueError, match="timezone-aware"):
         format_odds_retrieval_time("2026-09-10T12:34:56")
+
+
+class DecisionEntryStreamlit:
+    """Focused fake Streamlit surface for deliberate RB decision entry."""
+
+    def __init__(self, state, *, record_submitted=False, outcome_text="Over", notes=""):
+        self.session_state = state
+        self.record_submitted = record_submitted
+        self.outcome_text = outcome_text
+        self.notes = notes
+        self.messages = []
+
+    def title(self, value): self.messages.append(("title", value))
+    def info(self, value): self.messages.append(("info", value))
+    def caption(self, value): self.messages.append(("caption", value))
+    def warning(self, value): self.messages.append(("warning", value))
+    def error(self, value): self.messages.append(("error", value))
+    def success(self, value): self.messages.append(("success", value))
+    def subheader(self, value): self.messages.append(("subheader", value))
+    def markdown(self, value): self.messages.append(("markdown", value))
+    def write(self, value): pass
+    def form(self, value): return _Context()
+    def columns(self, values): return [_Context() for _ in values] if isinstance(values, list) else [_Context(), _Context()]
+    def spinner(self, value): return _Context()
+    def number_input(self, label, **kwargs): return kwargs["value"]
+    def date_input(self, label, **kwargs): return kwargs["value"]
+    def form_submit_button(self, label, **kwargs): return self.record_submitted if label == "Record Decision" else False
+    def selectbox(self, label, options, **kwargs):
+        if label == "Expected backfield participant":
+            return next(value for value in options if "depth 2" in value)
+        if label == "Exact displayed outcome":
+            formatter = kwargs["format_func"]
+            return next(value for value in options if self.outcome_text in formatter(value))
+        return options[0]
+    def text_area(self, label, **kwargs): return self.notes
+    def dataframe(self, value, **kwargs): pass
+    def stop(self): raise AssertionError("unexpected page stop")
+
+
+def _decision_report(rows=None, *, low_volume=False):
+    summary = make_summary()
+    summary.loc[summary["player_id"].eq("id_two"), "limited_rb_sample"] = low_volume
+    props = make_player_matched_odds([
+        {"player_id": "id_two", "nflverse_player_name": "Alex Runner", "outcome_name": "Over", "price": -110},
+        {"player_id": "id_two", "nflverse_player_name": "Alex Runner", "outcome_name": "Under", "price": -115},
+    ] if rows is None else rows)
+    return WeeklyRBResearchResult(
+        summary=summary,
+        rb_game_logs=make_rb_logs(),
+        defense_game_logs=make_defense_logs(),
+        player_prop_odds=type("Odds", (), {"player_matched_odds": props})(),
+    )
+
+
+def _decision_state(report):
+    return {
+        "football_rb_research_inputs": {"report_season": 2026, "report_week": 1, "as_of_date": date(2026, 9, 10), "history_season": 2025},
+        "football_rb_research_result": report,
+        "football_rb_research_odds_retrieved_at": datetime(2026, 9, 10, 12, tzinfo=timezone.utc),
+        "football_qb_research_result": "qb-state",
+    }
+
+
+def test_rb_decision_options_and_snapshot_keep_backup_identity_and_source_unchanged():
+    participant = make_summary().loc[lambda rows: rows["player_id"].eq("id_two")].iloc[0]
+    props = make_player_matched_odds([
+        {"player_id": "id_two", "nflverse_player_name": "Alex Runner"},
+        {"player_id": "id_two", "nflverse_player_name": "Alex Runner", "outcome_name": "Under", "price": -115},
+    ])
+    before = props.copy(deep=True)
+    options = build_rb_decision_outcome_options(props)
+    decision = build_rb_pending_decision(
+        props, participant, next(option.option_id for option in options if "Over -110" in option.label),
+        datetime(2026, 9, 10, 12, tzinfo=timezone.utc),
+        datetime(2026, 9, 10, 13, tzinfo=timezone.utc),
+    )
+    assert (decision.position, decision.market_key, decision.player_id, decision.game_id) == (
+        "RB", "player_rush_yds", "id_two", "2026_01_KC_LAC",
+    )
+    assert (decision.player_name, decision.team, decision.opponent, decision.season, decision.week) == (
+        "Alex Runner", "KC", "LAC", 2026, 1,
+    )
+    pd.testing.assert_frame_equal(props, before)
+
+
+def test_rb_decision_snapshot_rejects_context_conflict_and_duplicate_identity_conflict():
+    participant = make_summary().loc[lambda rows: rows["player_id"].eq("id_two")].iloc[0]
+    props = make_player_matched_odds([{"player_id": "id_two", "nflverse_player_name": "Alex Runner"}])
+    option = build_rb_decision_outcome_options(props)[0]
+    changed = participant.copy()
+    changed["opponent"] = "DEN"
+    with pytest.raises(RBDecisionEntryValidationError, match="opponent"):
+        build_rb_pending_decision(
+            props,
+            changed,
+            option.option_id,
+            datetime(2026, 9, 10, 12, tzinfo=timezone.utc),
+            datetime(2026, 9, 10, 13, tzinfo=timezone.utc),
+        )
+    conflict = make_player_matched_odds([
+        {"player_id": "id_two", "nflverse_player_name": "Alex Runner"},
+        {"player_id": "id_two", "nflverse_player_name": "Different Runner"},
+    ])
+    with pytest.raises(RBDecisionEntryValidationError, match="conflicting"):
+        build_rb_decision_outcome_options(conflict)
+
+
+def test_rb_selector_rerun_never_records_opens_database_or_reloads_backend():
+    report = _decision_report()
+    state = _decision_state(report)
+    render_football_rb_research_page(
+        streamlit_module=DecisionEntryStreamlit(state),
+        report_loader=lambda **_kwargs: pytest.fail("RB backend reran"),
+        database_opener=lambda: pytest.fail("SQLite opened without submission"),
+    )
+    assert state["football_rb_research_result"] is report
+    assert state["football_qb_research_result"] == "qb-state"
+
+
+@pytest.mark.parametrize(
+    ("outcome_text", "selection", "price", "notes"),
+    [("Over", "over", -110, "  backup note  "), ("Under", "under", -115, "   ")],
+)
+def test_deliberate_backup_rb_submission_records_exact_snapshot(tmp_path, outcome_text, selection, price, notes):
+    path = tmp_path / "decisions.sqlite3"
+    report = _decision_report(low_volume=True)
+    state = _decision_state(report)
+    opened = []
+
+    def opener():
+        connection = open_local_decision_database(path)
+        opened.append(connection)
+        return connection
+
+    render_football_rb_research_page(
+        streamlit_module=DecisionEntryStreamlit(state, record_submitted=True, outcome_text=outcome_text, notes=notes),
+        report_loader=lambda **_kwargs: pytest.fail("RB backend reran"), database_opener=opener,
+        clock=lambda: datetime(2026, 9, 10, 13, tzinfo=timezone.utc), id_factory=lambda: f"rb-{selection}",
+    )
+    check = open_local_decision_database(path)
+    try:
+        decision = get_decision(check, f"rb-{selection}")
+    finally:
+        check.close()
+    assert decision is not None
+    assert (decision.line, decision.selected_price, decision.selection, decision.sportsbook) == (Decimal("55.5"), price, selection, "draftkings")
+    assert (decision.player_id, decision.game_id, decision.team, decision.opponent) == ("id_two", "2026_01_KC_LAC", "KC", "LAC")
+    assert decision.odds_retrieved_at == datetime(2026, 9, 10, 12, tzinfo=timezone.utc)
+    assert decision.recorded_at == datetime(2026, 9, 10, 13, tzinfo=timezone.utc)
+    assert decision.research_notes == ("backup note" if selection == "over" else None)
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+    assert state["football_rb_research_result"] is report
+    assert state["football_qb_research_result"] == "qb-state"
+
+
+def test_rb_exact_duplicate_is_non_destructive_and_context_failure_never_opens_sqlite(tmp_path):
+    path = tmp_path / "decisions.sqlite3"
+    ids = iter(("first", "second"))
+    messages = []
+    for _ in range(2):
+        ui = DecisionEntryStreamlit(_decision_state(_decision_report()), record_submitted=True)
+        render_football_rb_research_page(
+            streamlit_module=ui, database_opener=lambda: open_local_decision_database(path),
+            clock=lambda: datetime(2026, 9, 10, 13, tzinfo=timezone.utc), id_factory=lambda: next(ids),
+        )
+        messages.extend(ui.messages)
+    check = open_local_decision_database(path)
+    try:
+        assert [decision.decision_id for decision in list_decisions(check)] == ["first"]
+    finally:
+        check.close()
+    assert any(kind == "info" and "already recorded" in message for kind, message in messages)
+
+    bad = _decision_report([{"player_id": "id_two", "nflverse_player_name": "Alex Runner", "nflverse_team": "DEN"}])
+    render_football_rb_research_page(
+        streamlit_module=DecisionEntryStreamlit(_decision_state(bad), record_submitted=True),
+        database_opener=lambda: pytest.fail("context mismatch opened SQLite"),
+        clock=lambda: datetime(2026, 9, 10, 13, tzinfo=timezone.utc),
+    )

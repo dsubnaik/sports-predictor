@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any
 
 import pandas as pd
 
+from football.decisions import PendingDecision
 from football.pipeline.build_weekly_player_prop_odds import (
     WEEKLY_PLAYER_PROP_ODDS_COLUMNS,
     WeeklyPlayerPropOddsResult,
@@ -106,6 +108,18 @@ class ParticipantOption:
 
     option_id: str
     label: str
+
+
+@dataclass(frozen=True)
+class RBDecisionOutcomeOption:
+    """One stable, matched rushing-yard outcome eligible for recording."""
+
+    option_id: str
+    label: str
+
+
+class RBDecisionEntryValidationError(ValueError):
+    """Raised when displayed RB odds cannot safely form a decision snapshot."""
 
 
 def default_history_season(report_season: int, report_week: int) -> int:
@@ -232,6 +246,156 @@ def filter_selected_rb_rushing_props(
         & (player_matched_odds["player_id"] == player_id)
     ].copy(deep=True)
     return rows.reset_index(drop=True)
+
+
+def build_rb_decision_outcome_options(
+    props: pd.DataFrame,
+) -> list[RBDecisionOutcomeOption]:
+    """Return deterministic exact matched-outcome choices without mutating ``props``."""
+
+    _require_player_prop_schema(props)
+    choices: dict[str, tuple[tuple[str, ...], str]] = {}
+    for _, row in _eligible_rb_decision_rows(props).iterrows():
+        option_id = _rb_decision_option_id(row)
+        snapshot = _rb_snapshot_values(row)
+        label = _rb_decision_option_label(row)
+        existing = choices.get(option_id)
+        if existing is not None and existing[0] != snapshot:
+            raise RBDecisionEntryValidationError(
+                "conflicting matched odds rows share one decision selection identity"
+            )
+        if existing is None or label < existing[1]:
+            choices[option_id] = (snapshot, label)
+    return [
+        RBDecisionOutcomeOption(option_id=option_id, label=values[1])
+        for option_id, values in sorted(choices.items(), key=lambda item: (item[1][1], item[0]))
+    ]
+
+
+def build_rb_pending_decision(
+    props: pd.DataFrame,
+    participant: pd.Series,
+    option_id: object,
+    odds_retrieved_at: object,
+    recorded_at: object,
+    research_notes: object | None = None,
+) -> PendingDecision:
+    """Create one RB pending-decision input from a currently displayed outcome.
+
+    The UI validates exact participant and game identity here; the decision
+    store remains authoritative for line, price, notes, and timestamp rules.
+    """
+
+    _require_player_prop_schema(props)
+    if not isinstance(option_id, str) or not option_id:
+        raise RBDecisionEntryValidationError("a displayed rushing-yard outcome must be selected")
+    matches = [
+        row.copy(deep=True)
+        for _, row in _eligible_rb_decision_rows(props).iterrows()
+        if _rb_decision_option_id(row) == option_id
+    ]
+    if not matches:
+        raise RBDecisionEntryValidationError(
+            "the selected rushing-yard outcome is no longer available for this participant"
+        )
+    if len({_rb_snapshot_values(row) for row in matches}) != 1:
+        raise RBDecisionEntryValidationError(
+            "conflicting matched odds rows share one decision selection identity"
+        )
+    row = min(matches, key=_rb_row_sort_key)
+    context = _rb_decision_context(participant, row)
+    return PendingDecision(
+        position="RB",
+        player_id=context["player_id"],
+        player_name=_required_context_text(row.get("nflverse_player_name"), "player_name"),
+        team=context["team"],
+        opponent=context["opponent"],
+        season=row.get("nflverse_season"),
+        week=row.get("nflverse_week"),
+        game_id=context["game_id"],
+        market_key="player_rush_yds",
+        sportsbook=_required_context_text(row.get("bookmaker_key"), "sportsbook"),
+        line=row.get("point"),
+        selection=_required_context_text(row.get("outcome_name"), "selection").lower(),
+        selected_price=row.get("price"),
+        odds_retrieved_at=odds_retrieved_at,
+        recorded_at=recorded_at,
+        research_notes=research_notes,
+    )
+
+
+def _eligible_rb_decision_rows(props: pd.DataFrame) -> pd.DataFrame:
+    return props.loc[
+        (props["market_key"] == "player_rush_yds")
+        & (props["event_match_status"] == "matched")
+        & (props["match_status"] == "matched")
+    ].copy(deep=True)
+
+
+def _rb_decision_option_id(row: pd.Series) -> str:
+    return json.dumps(
+        [_identity_value(row.get(column)) for column in (
+            "bookmaker_key", "nflverse_game_id", "player_id", "market_key",
+            "point", "outcome_name", "price",
+        )],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+
+
+def _rb_snapshot_values(row: pd.Series) -> tuple[str, ...]:
+    return tuple(_identity_value(row.get(column)) for column in (
+        "bookmaker_key", "nflverse_game_id", "player_id", "market_key", "point",
+        "outcome_name", "price", "nflverse_season", "nflverse_week",
+        "nflverse_player_name", "nflverse_team",
+    ))
+
+
+def _rb_decision_option_label(row: pd.Series) -> str:
+    title = display_value(row.get("bookmaker_title"), _identity_value(row.get("bookmaker_key")))
+    return (
+        f"{title} ({_identity_value(row.get('bookmaker_key'))}) | "
+        f"Rushing yards {_identity_value(row.get('point'))} | "
+        f"{_identity_value(row.get('outcome_name'))} {_identity_value(row.get('price'))}"
+    )
+
+
+def _rb_row_sort_key(row: pd.Series) -> tuple[str, ...]:
+    return tuple(_identity_value(row.get(column)) for column in WEEKLY_PLAYER_PROP_ODDS_COLUMNS)
+
+
+def _rb_decision_context(participant: pd.Series, row: pd.Series) -> dict[str, str]:
+    if not isinstance(participant, pd.Series):
+        raise RBDecisionEntryValidationError("selected RB participant is invalid")
+    game_id = _required_context_text(participant.get("game_id"), "game_id")
+    player_id = _required_context_text(participant.get("player_id"), "player_id")
+    team = _required_context_text(participant.get("team"), "team")
+    opponent = _required_context_text(participant.get("opponent"), "opponent")
+    if _required_context_text(row.get("nflverse_game_id"), "game_id") != game_id:
+        raise RBDecisionEntryValidationError("selected odds no longer match the selected RB game")
+    if _required_context_text(row.get("player_id"), "player_id") != player_id:
+        raise RBDecisionEntryValidationError("selected odds no longer match the selected RB participant")
+    if _required_context_text(row.get("nflverse_team"), "team") != team:
+        raise RBDecisionEntryValidationError("selected odds team does not match the selected RB context")
+    home_team = _required_context_text(row.get("nflverse_home_team"), "home team")
+    away_team = _required_context_text(row.get("nflverse_away_team"), "away team")
+    if {home_team, away_team} != {team, opponent}:
+        raise RBDecisionEntryValidationError("selected odds opponent does not match the selected RB context")
+    if _identity_value(row.get("nflverse_season")) != _identity_value(participant.get("report_season")):
+        raise RBDecisionEntryValidationError("selected odds season does not match the selected RB context")
+    if _identity_value(row.get("nflverse_week")) != _identity_value(participant.get("report_week")):
+        raise RBDecisionEntryValidationError("selected odds week does not match the selected RB context")
+    return {"game_id": game_id, "player_id": player_id, "team": team, "opponent": opponent}
+
+
+def _required_context_text(value: object, field: str) -> str:
+    if _blank(value) or not isinstance(value, str):
+        raise RBDecisionEntryValidationError(f"selected odds {field} must be nonblank")
+    return value.strip()
+
+
+def _identity_value(value: object) -> str:
+    return "<missing>" if pd.isna(value) else str(value).strip()
 
 
 def prepare_rushing_prop_display(props: pd.DataFrame) -> pd.DataFrame:
