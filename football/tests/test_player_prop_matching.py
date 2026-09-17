@@ -69,6 +69,29 @@ def test_harmless_name_formatting_matches_without_changing_display_names(sportsb
     assert result.loc[0, "nflverse_player_name"] == reference
 
 
+@pytest.mark.parametrize(("sportsbook", "reference"), [
+    ("James Cook", "James Cook III"), ("Player", "Player Jr."),
+    ("Player", "Player Sr."), ("Player", "Player II"),
+    ("Player", "Player IV"),
+])
+def test_generational_suffix_fallback_matches_only_a_unique_position_candidate(sportsbook, reference):
+    result = match_player_prop_odds(
+        odds_rows([{"market_key": "player_rush_yds", "player_name": sportsbook}]),
+        players([("rb-1", reference, "BUF", "RB")]),
+    )
+    assert result.loc[0, ["player_id", "match_status", "match_method"]].tolist() == [
+        "rb-1", "matched", "suffix_normalized_name_and_position"
+    ]
+
+
+def test_suffix_fallback_stays_ambiguous_when_multiple_candidates_normalize_alike():
+    result = match_player_prop_odds(
+        odds_rows([{"market_key": "player_rush_yds", "player_name": "James Cook"}]),
+        players([("rb-1", "James Cook II", "BUF", "RB"), ("rb-2", "James Cook III", "BUF", "RB")]),
+    )
+    assert result.loc[0, ["match_status", "match_candidate_count"]].tolist() == ["ambiguous", 2]
+
+
 def test_position_filtering_unmatched_and_ambiguous_results_are_explicit():
     odds = odds_rows([
         {"market_key": "player_pass_yds", "player_name": "Same Name"},

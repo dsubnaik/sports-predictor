@@ -1,7 +1,7 @@
 """Fetch and normalize current NFL passing- and rushing-yard prop odds.
 
 Normalized quotes use the natural identity ``(event_id, bookmaker_key,
-market_key, player_name, outcome_name)``.  ``outcome_name`` is canonicalized
+market_key, player_name, point, outcome_name)``.  ``outcome_name`` is canonicalized
 to ``Over`` or ``Under``; sportsbook player names are otherwise preserved
 apart from surrounding whitespace.
 """
@@ -44,6 +44,7 @@ _NATURAL_KEY = [
     "bookmaker_key",
     "market_key",
     "player_name",
+    "point",
     "outcome_name",
 ]
 

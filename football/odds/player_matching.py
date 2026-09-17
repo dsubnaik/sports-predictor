@@ -33,6 +33,8 @@ _MARKET_POSITIONS = {
 }
 _PLAYER_REFERENCE_COLUMNS = ["player_id", "player_name", "team", "position"]
 _MATCH_METHOD = "canonical_name_and_position"
+_SUFFIX_MATCH_METHOD = "suffix_normalized_name_and_position"
+_GENERATIONAL_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
 
 
 def match_player_prop_odds(odds: pd.DataFrame, players: pd.DataFrame) -> pd.DataFrame:
@@ -50,14 +52,19 @@ def match_player_prop_odds(odds: pd.DataFrame, players: pd.DataFrame) -> pd.Data
         return pd.DataFrame(columns=PLAYER_PROP_MATCH_OUTPUT_COLUMNS)
 
     candidate_lookup = _candidate_lookup(candidates)
+    suffix_lookup = _suffix_candidate_lookup(candidates)
     result = odds.loc[:, PLAYER_PROP_ODDS_COLUMNS].copy().reset_index(drop=True)
     match_rows = []
     for _, row in result.iterrows():
         expected_position = _MARKET_POSITIONS[row["market_key"]]
         canonical_name = _canonical_name(row["player_name"], "odds player_name")
         choices = candidate_lookup.get((canonical_name, expected_position), [])
+        method = _MATCH_METHOD
+        if not choices:
+            choices = suffix_lookup.get((_without_suffix(canonical_name), expected_position), [])
+            method = _SUFFIX_MATCH_METHOD
         match_rows.append(
-            _match_values(choices, expected_position)
+            _match_values(choices, expected_position, method)
         )
 
     matches = pd.DataFrame(match_rows, columns=PLAYER_PROP_MATCH_COLUMNS)
@@ -146,7 +153,14 @@ def _candidate_lookup(candidates: pd.DataFrame) -> dict[tuple[str, str], list[di
     return lookup
 
 
-def _match_values(choices: list[dict[str, str]], expected_position: str) -> dict[str, Any]:
+def _suffix_candidate_lookup(candidates: pd.DataFrame) -> dict[tuple[str, str], list[dict[str, str]]]:
+    lookup: dict[tuple[str, str], list[dict[str, str]]] = {}
+    for key, group in candidates.assign(_suffix_name=candidates["_canonical_name"].map(_without_suffix)).groupby(["_suffix_name", "_position"], sort=True):
+        lookup[key] = group.loc[:, ["player_id", "player_name", "team"]].drop_duplicates(subset=["player_id"]).sort_values("player_id", kind="mergesort").to_dict("records")
+    return lookup
+
+
+def _match_values(choices: list[dict[str, str]], expected_position: str, method: str) -> dict[str, Any]:
     count = len(choices)
     if count == 1:
         candidate = choices[0]
@@ -156,9 +170,9 @@ def _match_values(choices: list[dict[str, str]], expected_position: str) -> dict
             "nflverse_team": candidate["team"],
             "expected_position": expected_position,
             "match_status": "matched",
-            "match_method": _MATCH_METHOD,
+            "match_method": method,
             "match_candidate_count": 1,
-            "match_note": "Unique canonical name-and-position candidate",
+            "match_note": "Unique name-and-position candidate",
         }
     if count == 0:
         return {
@@ -215,6 +229,13 @@ def _canonical_name(value: Any, field: str) -> str:
     if not normalized:
         raise ValueError(f"{field} must be nonblank text")
     return normalized
+
+
+def _without_suffix(canonical_name: str) -> str:
+    tokens = canonical_name.split()
+    if len(tokens) > 1 and tokens[-1] in _GENERATIONAL_SUFFIXES:
+        return " ".join(tokens[:-1])
+    return canonical_name
 
 
 def _validate_reference_text(reference: pd.DataFrame, column: str) -> None:
