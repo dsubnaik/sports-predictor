@@ -9,7 +9,13 @@ import pytest
 
 import football.ui.decision_history_page as history_page
 from football.decision_database import open_local_decision_database
-from football.decisions import DecisionStoreError, PendingDecision, record_decision, settle_decision
+from football.decisions import (
+    DecisionStoreError,
+    PendingDecision,
+    get_decision,
+    record_decision,
+    settle_decision,
+)
 from football.results.batch_settlement import BatchSettlementEntry, BatchSettlementReport
 from football.results.completed_games import CompletedGameDiagnostic, CompletedGameReport
 from football.results.local_settlement_runner import LocalSettlementRunReport
@@ -20,7 +26,10 @@ from football.ui.decision_history_view import (
     decision_history_filter_options,
     decision_history_rows,
     filter_decision_history,
+    ManualSettlementInputError,
+    manual_pending_decision_options,
     pending_decision_seasons,
+    parse_manual_actual_result,
     settled_settlement_rows,
     unresolved_settlement_rows,
 )
@@ -38,13 +47,27 @@ class _Context:
 
 
 class FakeStreamlit:
-    def __init__(self, *, load=False, settle=False, acknowledged=False, state=None):
+    def __init__(
+        self,
+        *,
+        load=False,
+        settle=False,
+        acknowledged=False,
+        manual=False,
+        manual_acknowledged=False,
+        manual_result="",
+        state=None,
+    ):
         self.load = load
         self.settle = settle
         self.acknowledged = acknowledged
+        self.manual = manual
+        self.manual_acknowledged = manual_acknowledged
+        self.manual_result = manual_result
         self.session_state = {} if state is None else state
         self.messages = []
         self.dataframes = []
+        self.forms = []
 
     def title(self, value): self.messages.append(("title", value))
     def subheader(self, value): self.messages.append(("subheader", value))
@@ -54,11 +77,17 @@ class FakeStreamlit:
     def error(self, value): self.messages.append(("error", value))
     def success(self, value): self.messages.append(("success", value))
     def button(self, label, **kwargs): return self.load if label == "Load Decision History" else False
-    def form(self, _key): return _Context()
-    def checkbox(self, _label, key): return self.session_state.get(key, self.acknowledged)
-    def form_submit_button(self, label, **kwargs): return self.settle if label == "Settle Pending Decisions" else False
+    def form(self, key): self.forms.append(key); return _Context()
+    def checkbox(self, label, key):
+        default = self.manual_acknowledged if "I verified" in label else self.acknowledged
+        return self.session_state.get(key, default)
+    def form_submit_button(self, label, **kwargs):
+        if label == "Settle Pending Decisions": return self.settle
+        if label == "Settle Manually Verified Result": return self.manual
+        return False
     def columns(self, count): return [_Context() for _ in range(count)]
-    def selectbox(self, label, options, key): return self.session_state.get(key, options[0])
+    def selectbox(self, label, options, key, **kwargs): return self.session_state.get(key, options[0])
+    def text_input(self, _label, key): return self.session_state.get(key, self.manual_result)
     def dataframe(self, value, **kwargs): self.dataframes.append(value)
 
 
@@ -541,6 +570,272 @@ def test_pending_season_and_diagnostic_view_helpers_are_deterministic():
     }]
 
 
+def test_manual_historical_settlement_is_unavailable_before_load_or_without_pending_decisions(tmp_path):
+    before_load = FakeStreamlit()
+    history_page.render_decision_history_page(
+        streamlit_module=before_load,
+        database_opener=lambda: pytest.fail("manual form opened database before History load"),
+        settlement_runner=pytest.fail,
+    )
+    assert "football_history_manual_settlement_form" not in before_load.forms
+
+    path = tmp_path / "settled.sqlite3"
+    connection = open_local_decision_database(path)
+    try:
+        stored = record_decision(connection, _pending("settled"))
+        settle_decision(connection, stored.decision_id, Decimal("251"), settled_at=TIME + timedelta(hours=2))
+        connection.commit()
+    finally:
+        connection.close()
+    no_pending = FakeStreamlit(load=True)
+    history_page.render_decision_history_page(
+        streamlit_module=no_pending,
+        database_opener=lambda: open_local_decision_database(path),
+        settlement_runner=pytest.fail,
+    )
+    assert "football_history_manual_settlement_form" not in no_pending.forms
+    assert any("No loaded pending decisions" in message for kind, message in no_pending.messages if kind == "info")
+
+
+def test_manual_pending_options_and_decimal_parser_are_deterministic_and_safe():
+    later = _pending("later", season=2026)
+    earlier = _pending("earlier", season=2025)
+    options = manual_pending_decision_options((later, earlier))
+    assert [option.decision_id for option in options] == ["earlier", "later"]
+    assert "QB/player_pass_yds" in options[0].label
+    assert "KC vs LAC" in options[0].label
+    assert "draft over 250.5" in options[0].label
+    assert options[0].label.endswith("earlier")
+    assert parse_manual_actual_result(" 250.125 ") == Decimal("250.125")
+    assert parse_manual_actual_result("-1") == Decimal("-1")
+    for value in ("", "NaN", "Infinity", "-Infinity", True, 12):
+        with pytest.raises(ManualSettlementInputError):
+            parse_manual_actual_result(value)
+
+
+def test_manual_unacknowledged_or_invalid_result_never_opens_database(tmp_path):
+    stored = _write_pending(tmp_path)
+    state = _manual_state(stored)
+    unacknowledged = FakeStreamlit(
+        manual=True,
+        manual_acknowledged=False,
+        manual_result="251",
+        state=state,
+    )
+    history_page.render_decision_history_page(
+        streamlit_module=unacknowledged,
+        database_opener=lambda: pytest.fail("unacknowledged manual submission opened database"),
+        settlement_runner=pytest.fail,
+    )
+    assert any("Acknowledge" in message for kind, message in unacknowledged.messages if kind == "error")
+
+    for result in ("", "NaN", "Infinity", "-Infinity"):
+        invalid = FakeStreamlit(manual=True, manual_acknowledged=True, manual_result=result, state=_manual_state(stored))
+        history_page.render_decision_history_page(
+            streamlit_module=invalid,
+            database_opener=lambda: pytest.fail("invalid result opened database"),
+            settlement_runner=pytest.fail,
+        )
+        assert any("finite" in message or "nonblank" in message for kind, message in invalid.messages if kind == "error")
+
+
+@pytest.mark.parametrize(
+    ("selection", "line", "result_text", "expected_status"),
+    [
+        ("over", Decimal("250"), "251", "win"),
+        ("over", Decimal("250"), "249", "loss"),
+        ("over", Decimal("250"), "250", "push"),
+        ("under", Decimal("250"), "249", "win"),
+        ("under", Decimal("250"), "251", "loss"),
+        ("under", Decimal("250"), "250", "push"),
+    ],
+)
+def test_manual_settlement_uses_store_outcomes_and_refreshes_history(
+    tmp_path,
+    selection,
+    line,
+    result_text,
+    expected_status,
+):
+    path = tmp_path / f"{selection}-{result_text}.sqlite3"
+    connection = open_local_decision_database(path)
+    try:
+        stored = record_decision(
+            connection,
+            _pending("manual", selection=selection, line=line),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    opened = []
+
+    def opener():
+        current = open_local_decision_database(path)
+        opened.append(current)
+        return current
+
+    ui = FakeStreamlit(
+        manual=True,
+        manual_acknowledged=True,
+        manual_result=result_text,
+        state=_manual_state(stored),
+    )
+    history_page.render_decision_history_page(
+        streamlit_module=ui,
+        database_opener=opener,
+        settlement_runner=pytest.fail,
+        manual_settlement_clock=lambda: TIME + timedelta(hours=3),
+    )
+    check = open_local_decision_database(path)
+    try:
+        settled = get_decision(check, "manual")
+        assert settled.status == expected_status
+        assert settled.actual_result == Decimal(result_text)
+        assert settled.settled_at == TIME + timedelta(hours=3)
+    finally:
+        check.close()
+    assert len(opened) == 2
+    assert _summary_rows(ui)[0]["Pending"] == 0
+    assert any("No Odds API request was made" in message for kind, message in ui.messages if kind == "success")
+    for current in opened:
+        with pytest.raises(sqlite3.ProgrammingError):
+            current.execute("SELECT 1")
+
+
+def test_manual_decimal_and_negative_results_round_trip_without_float_conversion(tmp_path):
+    path = tmp_path / "manual-decimal.sqlite3"
+    connection = open_local_decision_database(path)
+    try:
+        decimal_decision = record_decision(connection, _pending("decimal", line=Decimal("250")))
+        negative_decision = record_decision(
+            connection,
+            _pending("negative", line=Decimal("0"), selection="under"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    for stored, value in ((decimal_decision, "250.125"), (negative_decision, "-1")):
+        ui = FakeStreamlit(
+            manual=True,
+            manual_acknowledged=True,
+            manual_result=value,
+            state=_manual_state(stored),
+        )
+        history_page.render_decision_history_page(
+            streamlit_module=ui,
+            database_opener=lambda: open_local_decision_database(path),
+            settlement_runner=pytest.fail,
+            manual_settlement_clock=lambda: TIME + timedelta(hours=3),
+        )
+    check = open_local_decision_database(path)
+    try:
+        assert get_decision(check, "decimal").actual_result == Decimal("250.125")
+        assert get_decision(check, "negative").actual_result == Decimal("-1")
+    finally:
+        check.close()
+
+
+def test_manual_settlement_rereads_selected_id_and_handles_missing_id_without_settling(tmp_path, monkeypatch):
+    stored = _write_pending(tmp_path)
+    calls = []
+    original_get = history_page.get_decision
+
+    def counted_get(connection, decision_id):
+        calls.append(decision_id)
+        return original_get(connection, decision_id)
+
+    monkeypatch.setattr(history_page, "get_decision", counted_get)
+    empty_path = tmp_path / "missing.sqlite3"
+    ui = FakeStreamlit(
+        manual=True,
+        manual_acknowledged=True,
+        manual_result="251",
+        state=_manual_state(stored),
+    )
+    monkeypatch.setattr(history_page, "settle_decision", pytest.fail)
+    history_page.render_decision_history_page(
+        streamlit_module=ui,
+        database_opener=lambda: open_local_decision_database(empty_path),
+        settlement_runner=pytest.fail,
+        manual_settlement_clock=lambda: TIME + timedelta(hours=3),
+    )
+    assert calls == [stored.decision_id]
+    assert any("no longer exists" in message for kind, message in ui.messages if kind == "error")
+
+
+def test_manual_idempotent_confirmation_and_conflict_preserve_existing_result(tmp_path):
+    path = tmp_path / "concurrent.sqlite3"
+    connection = open_local_decision_database(path)
+    try:
+        pending = record_decision(connection, _pending("concurrent"))
+        settled = settle_decision(connection, pending.decision_id, Decimal("251"), settled_at=TIME + timedelta(hours=2))
+        connection.commit()
+    finally:
+        connection.close()
+
+    confirmed = FakeStreamlit(
+        manual=True,
+        manual_acknowledged=True,
+        manual_result="251",
+        state=_manual_state(pending),
+    )
+    history_page.render_decision_history_page(
+        streamlit_module=confirmed,
+        database_opener=lambda: open_local_decision_database(path),
+        settlement_runner=pytest.fail,
+        manual_settlement_clock=lambda: TIME + timedelta(hours=3),
+    )
+    assert any("Manual settlement concurrent" in message for kind, message in confirmed.messages if kind == "success")
+
+    conflict = FakeStreamlit(
+        manual=True,
+        manual_acknowledged=True,
+        manual_result="249",
+        state=_manual_state(pending),
+    )
+    history_page.render_decision_history_page(
+        streamlit_module=conflict,
+        database_opener=lambda: open_local_decision_database(path),
+        settlement_runner=pytest.fail,
+        manual_settlement_clock=lambda: TIME + timedelta(hours=3),
+    )
+    check = open_local_decision_database(path)
+    try:
+        assert get_decision(check, "concurrent") == settled
+    finally:
+        check.close()
+    assert any("nothing was overwritten" in message for kind, message in conflict.messages if kind == "error")
+
+
+def test_manual_refresh_failure_preserves_history_and_marks_it_stale(tmp_path, monkeypatch):
+    path = tmp_path / "refresh.sqlite3"
+    stored = _write_pending_to_path(path)
+    state = {"football_decision_history_decisions": (stored,), "football_qb_research_result": "qb", "football_rb_research_result": "rb"}
+    first = open_local_decision_database(path)
+    refresh = sqlite3.connect(":memory:")
+    opened = iter((first, refresh))
+    monkeypatch.setattr(
+        history_page,
+        "list_decisions",
+        lambda _connection: (_ for _ in ()).throw(DecisionStoreError("refresh failure")),
+    )
+    ui = FakeStreamlit(manual=True, manual_acknowledged=True, manual_result="251", state=_manual_state(stored, state))
+    history_page.render_decision_history_page(
+        streamlit_module=ui,
+        database_opener=lambda: next(opened),
+        settlement_runner=pytest.fail,
+        manual_settlement_clock=lambda: TIME + timedelta(hours=3),
+    )
+    assert state["football_decision_history_decisions"] == (stored,)
+    assert state["football_qb_research_result"] == "qb"
+    assert state["football_rb_research_result"] == "rb"
+    assert state["football_decision_history_may_be_stale"] is True
+    assert any("may be stale" in message for kind, message in ui.messages if kind == "warning")
+    for current in (first, refresh):
+        with pytest.raises(sqlite3.ProgrammingError):
+            current.execute("SELECT 1")
+
+
 def _write_pending(tmp_path, decision_id="pending"):
     path = tmp_path / f"{decision_id}.sqlite3"
     connection = open_local_decision_database(path)
@@ -560,3 +855,9 @@ def _write_pending_to_path(path, decision_id="pending-qb"):
         return stored
     finally:
         connection.close()
+
+
+def _manual_state(stored, state=None):
+    values = {} if state is None else state
+    values.update({"football_decision_history_decisions": (stored,)})
+    return values

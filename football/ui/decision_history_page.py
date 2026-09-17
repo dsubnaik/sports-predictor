@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from typing import Any, Callable
+from datetime import datetime, timezone
 
 import streamlit as st
 
@@ -11,7 +12,14 @@ from football.decision_database import (
     DecisionDatabaseValidationError,
     open_local_decision_database,
 )
-from football.decisions import DecisionStoreError, StoredDecision, list_decisions
+from football.decisions import (
+    DecisionStoreError,
+    SettlementConflictError,
+    StoredDecision,
+    get_decision,
+    list_decisions,
+    settle_decision,
+)
 from football.odds.scores import OddsScoresError
 from football.results.decision_performance import DecisionPerformanceError
 from football.results.decision_performance_breakdowns import (
@@ -33,6 +41,9 @@ from football.ui.decision_history_view import (
     decision_history_filter_options,
     decision_history_rows,
     filter_decision_history,
+    ManualSettlementInputError,
+    manual_pending_decision_options,
+    parse_manual_actual_result,
     pending_decision_seasons,
     settled_settlement_rows,
     unresolved_settlement_rows,
@@ -49,6 +60,7 @@ def render_decision_history_page(
     streamlit_module: Any | None = None,
     database_opener: Callable[[], sqlite3.Connection] = open_local_decision_database,
     settlement_runner: Callable[[int], LocalSettlementRunReport] = run_local_decision_settlement,
+    manual_settlement_clock: Callable[[], object] | None = None,
 ) -> None:
     """Render a deliberately loaded, read-only history of stored decisions."""
 
@@ -72,6 +84,13 @@ def render_decision_history_page(
         raise TypeError("loaded decision history must be a tuple of StoredDecision values")
 
     _render_settlement_section(ui, decisions, database_opener, settlement_runner)
+    decisions = ui.session_state[_HISTORY_STATE_KEY]
+    _render_manual_historical_settlement(
+        ui,
+        decisions,
+        database_opener,
+        manual_settlement_clock or (lambda: datetime.now(timezone.utc)),
+    )
     if ui.session_state.get(_HISTORY_STALE_STATE_KEY):
         ui.warning(
             "Displayed History and performance may be stale until Load Decision History succeeds."
@@ -237,6 +256,108 @@ def _render_prior_settlement_report(ui: Any) -> None:
             "Unresolved decisions remain pending. A missing player result is never assumed to be zero."
         )
         ui.dataframe(unresolved_rows, use_container_width=True, hide_index=True)
+
+
+def _render_manual_historical_settlement(
+    ui: Any,
+    decisions: tuple[StoredDecision, ...],
+    database_opener: Callable[[], sqlite3.Connection],
+    clock: Callable[[], object],
+) -> None:
+    """Render a deliberate no-network recovery path for older pending decisions."""
+
+    ui.subheader("Manual Historical Settlement")
+    options = manual_pending_decision_options(decisions)
+    if not options:
+        ui.info("No loaded pending decisions are available for manual historical settlement.")
+        return
+
+    option_by_id = {option.decision_id: option for option in options}
+    ui.caption(
+        "Recovery tool for officially verified results not handled through the recent live-results window. "
+        "This action does not use the Odds API and consumes no API credits."
+    )
+    with ui.form("football_history_manual_settlement_form"):
+        decision_id = ui.selectbox(
+            "Pending decision to settle manually",
+            list(option_by_id),
+            format_func=lambda value: option_by_id[value].label,
+            key="football_history_manual_settlement_decision_id",
+        )
+        actual_result_text = ui.text_input(
+            "Official actual result",
+            key="football_history_manual_settlement_actual_result",
+        )
+        acknowledged = ui.checkbox(
+            "I verified this official player result. This manual action is intended for decisions "
+            "that could not be settled through the recent live-results window.",
+            key="football_history_manual_settlement_acknowledged",
+        )
+        submitted = ui.form_submit_button("Settle Manually Verified Result", type="primary")
+
+    if not submitted:
+        return
+    if not acknowledged:
+        ui.error("Acknowledge that you verified the official player result before settling.")
+        return
+    if decision_id not in option_by_id:
+        ui.error("The selected pending decision is no longer available for manual settlement.")
+        return
+    try:
+        actual_result = parse_manual_actual_result(actual_result_text)
+    except ManualSettlementInputError as error:
+        ui.error(f"Could not settle manually: {error}")
+        return
+
+    _run_manual_historical_settlement(
+        ui,
+        decision_id,
+        actual_result,
+        clock(),
+        database_opener,
+    )
+
+
+def _run_manual_historical_settlement(
+    ui: Any,
+    decision_id: str,
+    actual_result: object,
+    settled_at: object,
+    database_opener: Callable[[], sqlite3.Connection],
+) -> None:
+    """Reread one ID and delegate mutation, idempotency, and conflicts to the store."""
+
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = database_opener()
+        current = get_decision(connection, decision_id)
+        if current is None:
+            ui.error("The selected decision no longer exists in the local decision database.")
+            return
+        stored = settle_decision(
+            connection,
+            decision_id,
+            actual_result,
+            settled_at=settled_at,
+        )
+    except SettlementConflictError:
+        ui.error("Manual settlement conflicts with the stored result; nothing was overwritten.")
+        return
+    except DecisionStoreError:
+        ui.error("Could not settle manually because the stored decision or timestamp was invalid.")
+        return
+    except (DecisionDatabaseValidationError, OSError, sqlite3.Error):
+        ui.error("Could not access the local decision database for manual settlement.")
+        return
+    finally:
+        if connection is not None:
+            connection.close()
+
+    ui.success(
+        f"Manual settlement {stored.decision_id}: {stored.player_name} official result "
+        f"{format(stored.actual_result, 'f')} — {stored.status}. No Odds API request was made."
+    )
+    _load_history(ui, database_opener, warn_if_stale=True)
 
 
 def _render_filters(ui: Any, options: dict[str, tuple[object, ...]]) -> tuple[object, ...]:
