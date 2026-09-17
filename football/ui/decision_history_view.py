@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
-from decimal import Context, Decimal, localcontext
+from decimal import Context, Decimal, InvalidOperation, localcontext
 
 from football.decisions import StoredDecision
 from football.results.batch_settlement import BatchSettlementEntry
@@ -17,6 +18,59 @@ from football.results.decision_performance_breakdowns import (
 
 ALL_FILTER = "All"
 STATUS_FILTERS = (ALL_FILTER, "pending", "win", "loss", "push")
+
+
+class ManualSettlementInputError(ValueError):
+    """Raised when a manually verified result cannot be parsed safely."""
+
+
+@dataclass(frozen=True)
+class ManualSettlementOption:
+    """One deterministic pending-decision choice for manual recovery."""
+
+    decision_id: str
+    label: str
+
+
+def manual_pending_decision_options(
+    decisions: tuple[StoredDecision, ...],
+) -> tuple[ManualSettlementOption, ...]:
+    """Return unambiguous manual-recovery options in explicit store order."""
+
+    pending = sorted(
+        (decision for decision in decisions if decision.status == "pending"),
+        key=lambda decision: (decision.recorded_at, decision.decision_id),
+    )
+    return tuple(
+        ManualSettlementOption(
+            decision_id=decision.decision_id,
+            label=(
+                f"{decision.player_name} — {decision.position}/{decision.market_key} — "
+                f"{decision.season} Week {decision.week} — {decision.team} vs {decision.opponent} — "
+                f"{decision.sportsbook} {decision.selection} {format(decision.line, 'f')} — "
+                f"{decision.decision_id}"
+            ),
+        )
+        for decision in pending
+    )
+
+
+def parse_manual_actual_result(value: object) -> Decimal:
+    """Parse finite manually verified result text without float conversion or rounding."""
+
+    if isinstance(value, bool) or not isinstance(value, str) or not (text := value.strip()):
+        raise ManualSettlementInputError("official actual result must be nonblank numeric text")
+    try:
+        result = Decimal(text)
+    except InvalidOperation as error:
+        raise ManualSettlementInputError(
+            "official actual result must be finite numeric text"
+        ) from error
+    if not result.is_finite():
+        raise ManualSettlementInputError(
+            "official actual result must be finite numeric text"
+        )
+    return result.normalize() if result != 0 else Decimal(0)
 
 
 def pending_decision_seasons(decisions: tuple[StoredDecision, ...]) -> tuple[int, ...]:
