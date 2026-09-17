@@ -455,6 +455,31 @@ def test_qb_decision_options_keep_over_and_under_distinct_and_reject_context_mis
         )
 
 
+def test_qb_decision_options_keep_alternate_lines_distinct_for_one_player_game():
+    matchup = make_summary().loc[0]
+    props = make_player_matched_odds([
+        {"point": 249.5, "outcome_name": "Over", "price": -110},
+        {"point": 249.5, "outcome_name": "Under", "price": -115},
+        {"point": 250.5, "outcome_name": "Over", "price": 100},
+        {"point": 250.5, "outcome_name": "Under", "price": -130},
+    ])
+    before = props.copy(deep=True)
+
+    display = prepare_passing_prop_display(props)
+    options = build_qb_decision_outcome_options(props)
+    selected = next(option for option in options if "250.5" in option.label and "Over 100" in option.label)
+    decision = build_qb_pending_decision(
+        props, matchup, selected.option_id,
+        datetime(2026, 9, 10, 12, tzinfo=timezone.utc),
+        datetime(2026, 9, 10, 13, tzinfo=timezone.utc),
+    )
+
+    assert display["Passing Yards Line"].tolist() == [249.5, 250.5]
+    assert len(options) == 4
+    assert (decision.line, decision.selection, decision.selected_price) == (250.5, "over", 100)
+    pd.testing.assert_frame_equal(props, before)
+
+
 def test_qb_decision_options_exclude_unresolved_rows_and_reject_conflicting_identity():
     props = make_player_matched_odds([
         {"event_match_status": "unmatched"},

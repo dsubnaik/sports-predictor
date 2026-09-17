@@ -185,3 +185,51 @@ def test_exact_duplicates_collapse_and_conflicting_natural_keys_raise():
     conflict["bookmakers"][0]["markets"][0]["outcomes"][1]["price"] = -120
     with pytest.raises(ValueError, match="Conflicting player-prop quotes"):
         normalize_player_prop_odds(conflict)
+
+
+def test_bovada_alternate_lines_preserve_each_side_and_only_collapse_exact_duplicates():
+    """Bovada can return separate market entries for alternate yardage points."""
+    first = make_market(
+        outcomes=[
+            make_outcome("Over", "Jared Goff", -110, 249.5),
+            make_outcome("Under", "Jared Goff", -120, 249.5),
+        ],
+        last_update="2026-09-08T12:01:00Z",
+    )
+    alternate = make_market(
+        outcomes=[
+            make_outcome("Over", "Jared Goff", 105, 250.5),
+            make_outcome("Under", "Jared Goff", -135, 250.5),
+        ],
+        last_update="2026-09-08T12:02:00Z",
+    )
+    payload = make_event(bookmakers=[make_bookmaker(
+        key="bovada", title="Bovada", markets=[first, alternate, deepcopy(first)]
+    )])
+    before = deepcopy(payload)
+
+    result = normalize_player_prop_odds(payload)
+
+    assert result[["point", "outcome_name", "price"]].values.tolist() == [
+        [249.5, "Over", -110], [249.5, "Under", -120],
+        [250.5, "Over", 105], [250.5, "Under", -135],
+    ]
+    assert result["bookmaker_key"].tolist() == ["bovada"] * 4
+    assert result["market_last_update"].tolist() == [
+        "2026-09-08T12:01:00Z", "2026-09-08T12:01:00Z",
+        "2026-09-08T12:02:00Z", "2026-09-08T12:02:00Z",
+    ]
+    assert result["event_id"].tolist() == ["event-1"] * 4
+    assert payload == before
+
+
+def test_bovada_conflicting_complete_quote_identity_still_raises():
+    market = make_market(outcomes=[make_outcome("Over", "Josh Allen", -110, 249.5)])
+    conflicting = deepcopy(market)
+    conflicting["outcomes"][0]["price"] = -120
+    payload = make_event(bookmakers=[make_bookmaker(
+        key="bovada", title="Bovada", markets=[market, conflicting]
+    )])
+
+    with pytest.raises(ValueError, match="Conflicting player-prop quotes"):
+        normalize_player_prop_odds(payload)
