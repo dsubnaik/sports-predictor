@@ -50,6 +50,7 @@ def load_qb_research(
     report_week: int,
     as_of_date: date,
     history_season: int,
+    include_player_props: bool = True,
 ) -> WeeklyQBResearchResult:
     """Build a fresh QB report with current passing-yard odds."""
 
@@ -58,7 +59,7 @@ def load_qb_research(
         report_week=report_week,
         as_of_date=as_of_date,
         history_season=history_season,
-        include_player_props=True,
+        include_player_props=include_player_props,
     )
 
 

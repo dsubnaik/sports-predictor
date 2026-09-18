@@ -142,3 +142,26 @@ def test_prepares_isolated_qb_and_rb_research_in_reverse_order_without_mutation(
     assert qb.research.defense_rows and rb.research.defense_rows
     assert rb.research.player_rows[0][0:2] == (2025, 3)
     for actual, original in zip((qb_logs, qb_defense, rb_logs, rb_defense), originals): pd.testing.assert_frame_equal(actual, original)
+
+
+class _Table:
+    def __init__(self, frame): self.frame = frame
+    def to_frame(self): return self.frame.copy(deep=True)
+
+
+def test_selected_snapshot_balanced_filter_preserves_all_rows_and_exact_boundaries():
+    rows = [
+        _line(player="q", outcome="Over", price=-130, point=250.5),
+        _line(player="q", outcome="Under", price=130, point=250.5),
+        _line(player="q", outcome="Over", price=-110, point=260.5),
+        _line(player="q", outcome="Under", price=-131, point=260.5),
+        _line(player="q", outcome="Over", price=-110, point=270.5),
+    ]
+    frame = pd.DataFrame([{column: row.get(column, pd.NA) for column in WEEKLY_PLAYER_PROP_ODDS_COLUMNS} for row in rows], columns=WEEKLY_PLAYER_PROP_ODDS_COLUMNS)
+    snapshot = type("Snapshot", (), {"player_matched_odds": _Table(frame), "event_matches": _Table(pd.DataFrame(columns=["event_id", "commence_time", "home_team", "away_team", "nflverse_game_id", "nflverse_season", "nflverse_week", "nflverse_home_team", "nflverse_away_team", "nflverse_kickoff_time", "event_match_status", "event_match_method", "event_match_candidate_count", "event_match_note"])), "retrieved_at": "now"})()
+    result = _result([("g1", "A", "away", "q", "QB")], [])
+    balanced = prepare_game_research(result, game_odds={"g1": snapshot}, line_filter="balanced")[0].away_team.participants[0]
+    all_lines = prepare_game_research(result, game_odds={"g1": snapshot}, line_filter="all")[0].away_team.participants[0]
+    assert [(prop.line, prop.outcome, prop.price) for prop in balanced.props] == [(250.5, "Over", -130), (250.5, "Under", 130)]
+    assert len(all_lines.props) == 5
+    pd.testing.assert_frame_equal(frame, snapshot.player_matched_odds.to_frame())

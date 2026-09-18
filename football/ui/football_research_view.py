@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
@@ -52,6 +52,7 @@ class ParticipantView:
     participant_order: float = float("inf")
     research: ResearchView | None = None
     decision_rows: tuple[tuple[object, ...], ...] = ()
+    has_filtered_out_props: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,7 +80,9 @@ class GameView:
 
 def prepare_game_research(
     result: FootballResearchResult,
-    odds_retrieved_at: object | None,
+    odds_retrieved_at: object | None = None,
+    game_odds: Mapping[str, Any] | None = None,
+    line_filter: str = "all",
 ) -> tuple[GameView, ...]:
     """Create an immutable game model without changing pipeline-owned tables.
 
@@ -89,8 +92,8 @@ def prepare_game_research(
 
     sources = _participant_sources(result)
     schedule = _schedule_rows(sources)
-    props, decisions, diagnostics = _prop_context(result, odds_retrieved_at)
-    participants = _participants(sources, props, decisions, result)
+    props, decisions, diagnostics, all_props = _prop_context(result, odds_retrieved_at, game_odds, line_filter)
+    participants = _participants(sources, props, decisions, result, all_props)
     games: list[GameView] = []
     for game_id, game_schedule in schedule.groupby("game_id", sort=False, dropna=False):
         game_key = _text(game_id) or "<missing game id>"
@@ -104,7 +107,7 @@ def prepare_game_research(
             team_views[home_away] = TeamView(team, home_away, tuple(visible), hidden)
         game_diagnostics = list(diagnostics.get(game_key, ()))
         for position, source in (("QB", result.qb_result), ("RB", result.rb_result)):
-            if source is not None and source.player_prop_odds is None:
+            if game_odds is None and source is not None and source.player_prop_odds is None:
                 game_diagnostics.append(
                     DiagnosticView(
                         "odds_unavailable",
@@ -168,7 +171,7 @@ def _schedule_rows(sources: pd.DataFrame) -> pd.DataFrame:
     return rows.sort_values(["game_id", "home_away", "team"], kind="mergesort").reset_index(drop=True)
 
 
-def _participants(sources: pd.DataFrame, props: dict[tuple[str, str, str], tuple[PropView, ...]], decisions: dict[tuple[str, str, str], tuple[tuple[object, ...], ...]], result: FootballResearchResult) -> list[tuple[str, str, ParticipantView]]:
+def _participants(sources: pd.DataFrame, props: dict[tuple[str, str, str], tuple[PropView, ...]], decisions: dict[tuple[str, str, str], tuple[tuple[object, ...], ...]], result: FootballResearchResult, all_props: dict[tuple[str, str, str], tuple[PropView, ...]]) -> list[tuple[str, str, ParticipantView]]:
     values: list[tuple[str, str, ParticipantView]] = []
     for _, row in sources.iterrows():
         game_id, team, position = _text(row["game_id"]) or "<missing game id>", _text(row["team"]) or "Unresolved team", row["position"]
@@ -177,7 +180,8 @@ def _participants(sources: pd.DataFrame, props: dict[tuple[str, str, str], tuple
         order = _number(row["participant_order"])
         role = "unresolved participant" if unresolved else ("expected QB" if position == "QB" else "expected RB")
         research = None if unresolved else _research(row, position, result)
-        values.append((game_id, team, ParticipantView(position, player_id, _text(row["player_name"]) or "Unresolved player", role, unresolved, bool(row["low_volume"]), props.get((game_id, player_id or "", position), ()), True, _rb_reason(row, position), order, research, decisions.get((game_id, player_id or "", position), ()))))
+        prop_key = (game_id, player_id or "", position)
+        values.append((game_id, team, ParticipantView(position, player_id, _text(row["player_name"]) or "Unresolved player", role, unresolved, bool(row["low_volume"]), props.get(prop_key, ()), True, _rb_reason(row, position), order, research, decisions.get(prop_key, ()), bool(all_props.get(prop_key)) and not bool(props.get(prop_key)))))
     return sorted(values, key=lambda item: (item[0], item[1], 0 if item[2].position == "QB" else 1, 0 if item[2].role == "leading expected RB" else 1, item[2].player_id or ""))
 
 
@@ -188,9 +192,9 @@ def _visible_team_participants(values: list[ParticipantView]) -> tuple[list[Part
     for value in values:
         visible = value.position != "RB" or value.unresolved or value is primary or bool(value.props) or value.visibility_reason in {"meaningful_recent_share", "meaningful_season_share_fallback"}
         if value is primary:
-            value = ParticipantView(value.position, value.player_id, value.player_name, "leading expected RB", value.unresolved, value.low_volume, value.props, value.visible, value.visibility_reason, value.participant_order, value.research, value.decision_rows)
+            value = ParticipantView(value.position, value.player_id, value.player_name, "leading expected RB", value.unresolved, value.low_volume, value.props, value.visible, value.visibility_reason, value.participant_order, value.research, value.decision_rows, value.has_filtered_out_props)
         elif value.position == "RB" and not value.unresolved:
-            value = ParticipantView(value.position, value.player_id, value.player_name, "additional/back-up RB", value.unresolved, value.low_volume, value.props, value.visible, value.visibility_reason, value.participant_order, value.research, value.decision_rows)
+            value = ParticipantView(value.position, value.player_id, value.player_name, "additional/back-up RB", value.unresolved, value.low_volume, value.props, value.visible, value.visibility_reason, value.participant_order, value.research, value.decision_rows, value.has_filtered_out_props)
         if visible: shown.append(value)
         else: hidden += 1
     return shown, hidden
@@ -232,15 +236,21 @@ def _research_rows(player: pd.DataFrame, defense: pd.DataFrame, player_formatter
     return ResearchView(tuple(player_display.columns), tuple(map(tuple, player_display.itertuples(index=False, name=None))), tuple(defense_display.columns), tuple(map(tuple, defense_display.itertuples(index=False, name=None))))
 
 
-def _prop_context(result: FootballResearchResult, retrieved_at: object | None) -> tuple[dict[tuple[str, str, str], tuple[PropView, ...]], dict[tuple[str, str, str], tuple[tuple[object, ...], ...]], dict[str, list[DiagnosticView]]]:
+def _prop_context(result: FootballResearchResult, retrieved_at: object | None, game_odds: Mapping[str, Any] | None, line_filter: str) -> tuple[dict[tuple[str, str, str], tuple[PropView, ...]], dict[tuple[str, str, str], tuple[tuple[object, ...], ...]], dict[str, list[DiagnosticView]], dict[tuple[str, str, str], tuple[PropView, ...]]]:
     props: dict[tuple[str, str, str], list[PropView]] = {}
     diagnostics: dict[str, list[DiagnosticView]] = {}
     decision_rows: dict[tuple[str, str, str], list[tuple[object, ...]]] = {}
-    for position, source in (("QB", result.qb_result), ("RB", result.rb_result)):
-        odds = None if source is None else source.player_prop_odds
+    sources: list[tuple[str, Any, object | None]] = []
+    if game_odds is None:
+        sources = [(position, None if source is None else source.player_prop_odds, retrieved_at) for position, source in (("QB", result.qb_result), ("RB", result.rb_result))]
+    else:
+        sources = [("selected", snapshot, getattr(snapshot, "retrieved_at", retrieved_at)) for snapshot in game_odds.values()]
+    for position, odds, source_retrieved_at in sources:
         if odds is None:
             continue
-        for frame, status, label in ((odds.event_matches, "event_match_status", "event"), (odds.player_matched_odds, "match_status", "player")):
+        odds_rows = odds.player_matched_odds.to_frame() if hasattr(odds.player_matched_odds, "to_frame") else odds.player_matched_odds.copy(deep=True)
+        event_rows = odds.event_matches.to_frame() if hasattr(odds.event_matches, "to_frame") else odds.event_matches.copy(deep=True)
+        for frame, status, label in ((event_rows, "event_match_status", "event"), (odds_rows, "match_status", "player")):
             for _, row in frame.copy(deep=True).iterrows():
                 value = _text(row.get(status))
                 if value in {"unmatched", "ambiguous"}:
@@ -251,23 +261,50 @@ def _prop_context(result: FootballResearchResult, retrieved_at: object | None) -
                     else:
                         message = f"{value.title()} sportsbook event: {_text(row.get('event_id')) or 'unknown event'}."
                     diagnostics.setdefault(game, []).append(DiagnosticView(f"{value}_{label}", message))
-        odds_rows = odds.player_matched_odds.copy(deep=True)
         for _, row in odds_rows.loc[(odds_rows["match_status"] == "matched") & (odds_rows["event_match_status"] == "matched")].iterrows():
-            market = "player_pass_yds" if position == "QB" else "player_rush_yds"
+            row_position = _text(row.get("expected_position")) or {"player_pass_yds": "QB", "player_rush_yds": "RB"}.get(row.get("market_key"), position)
+            market = "player_pass_yds" if row_position == "QB" else "player_rush_yds"
             if row.get("market_key") != market:
                 continue
             game, player = _text(row.get("nflverse_game_id")), _text(row.get("player_id"))
             if game and player:
-                props.setdefault((game, player, position), []).append(PropView(_text(row.get("bookmaker_title")) or _text(row.get("bookmaker_key")) or "Unknown sportsbook", row.get("point"), _text(row.get("outcome_name")) or "", row.get("price"), row.get("market_last_update"), retrieved_at))
-                decision_rows.setdefault((game, player, position), []).append(tuple(row.get(column) for column in WEEKLY_PLAYER_PROP_ODDS_COLUMNS))
+                key = (game, player, row_position or position)
+                props.setdefault(key, []).append(PropView(_text(row.get("bookmaker_title")) or _text(row.get("bookmaker_key")) or "Unknown sportsbook", row.get("point"), _text(row.get("outcome_name")) or "", row.get("price"), row.get("market_last_update"), source_retrieved_at))
+                decision_rows.setdefault(key, []).append(tuple(row.get(column) for column in WEEKLY_PLAYER_PROP_ODDS_COLUMNS))
     frozen = {key: tuple(sorted(value, key=lambda prop: (prop.sportsbook, str(prop.line), prop.outcome))) for key, value in props.items()}
+    all_props = frozen
+    if line_filter == "balanced":
+        allowed = _balanced_prop_keys(frozen)
+        frozen = {key: tuple(prop for prop in value if (key, prop.sportsbook, prop.line) in allowed) for key, value in frozen.items()}
+        frozen = {key: value for key, value in frozen.items() if value}
+        decision_rows = {key: rows for key, rows in decision_rows.items() if key in frozen}
     for key, value in frozen.items():
         outcomes = {(prop.sportsbook, str(prop.line), prop.outcome.lower()) for prop in value}
         pairs = {(book, line) for book, line, _ in outcomes}
         for book, line in pairs:
             if not {"over", "under"}.issubset({outcome for current_book, current_line, outcome in outcomes if (current_book, current_line) == (book, line)}):
                 diagnostics.setdefault(key[0], []).append(DiagnosticView("incomplete_over_under", f"{book} {line}: incomplete Over/Under pair for {key[2]} {key[1]}."))
-    return frozen, {key: tuple(values) for key, values in decision_rows.items()}, diagnostics
+    return frozen, {key: tuple(values) for key, values in decision_rows.items()}, diagnostics, all_props
+
+
+def _balanced_prop_keys(props: Mapping[tuple[str, str, str], tuple[PropView, ...]]) -> set[tuple[tuple[str, str, str], str, object]]:
+    allowed: set[tuple[tuple[str, str, str], str, object]] = set()
+    for player_key, values in props.items():
+        groups: dict[tuple[str, object], dict[str, object]] = {}
+        for value in values:
+            groups.setdefault((value.sportsbook, value.line), {})[value.outcome] = value.price
+        for (sportsbook, line), prices in groups.items():
+            if {"Over", "Under"}.issubset(prices) and all(_balanced_price(prices[side]) for side in ("Over", "Under")):
+                allowed.add((player_key, sportsbook, line))
+    return allowed
+
+
+def _balanced_price(value: object) -> bool:
+    try:
+        number = float(value)
+        return pd.notna(number) and -130 <= number <= 130
+    except (TypeError, ValueError):
+        return False
 
 
 def _reject_conflicting_schedule(rows: pd.DataFrame) -> None:
