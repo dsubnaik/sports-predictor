@@ -1,6 +1,10 @@
 """NFL sportsbook odds ingestion and normalization helpers."""
 
 from football.odds.player_props import (
+    DEFAULT_FOOTBALL_PROP_BOOKMAKERS,
+    EventPlayerPropsFetchResult,
+    OddsApiProviderError,
+    OddsApiQuotaMetadata,
     PLAYER_PROP_ODDS_COLUMNS,
     SUPPORTED_PLAYER_PROP_MARKETS,
     fetch_event_player_props,
@@ -29,6 +33,10 @@ from football.odds.event_discovery import (
 
 __all__ = [
     "PLAYER_PROP_ODDS_COLUMNS",
+    "DEFAULT_FOOTBALL_PROP_BOOKMAKERS",
+    "EventPlayerPropsFetchResult",
+    "OddsApiProviderError",
+    "OddsApiQuotaMetadata",
     "PLAYER_PROP_MATCH_COLUMNS",
     "PLAYER_PROP_MATCH_OUTPUT_COLUMNS",
     "EVENT_MATCH_COLUMNS",

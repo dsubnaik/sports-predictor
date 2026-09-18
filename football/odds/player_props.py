@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from numbers import Real
 from typing import Any
 
@@ -23,6 +25,14 @@ NFL_SPORT_KEY = "americanfootball_nfl"
 ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4/sports"
 REQUEST_TIMEOUT_SECONDS = 10
 SUPPORTED_PLAYER_PROP_MARKETS = frozenset({"player_pass_yds", "player_rush_yds"})
+# These are deliberately explicit for selected-game requests.  The provider's
+# ``bookmakers`` parameter is mutually exclusive with the legacy ``regions``
+# request used by existing callers.
+DEFAULT_FOOTBALL_PROP_BOOKMAKERS = (
+    "draftkings",
+    "fanduel",
+    "betrivers",
+)
 PLAYER_PROP_ODDS_COLUMNS = [
     "event_id",
     "commence_time",
@@ -49,6 +59,37 @@ _NATURAL_KEY = [
 ]
 
 
+@dataclass(frozen=True)
+class OddsApiQuotaMetadata:
+    """Optional credit metadata returned by The Odds API response headers."""
+
+    requests_last: int | None
+    requests_used: int | None
+    requests_remaining: int | None
+
+
+@dataclass(frozen=True)
+class EventPlayerPropsFetchResult:
+    """A raw event-odds payload plus optional, non-secret quota metadata."""
+
+    payload: Any
+    requests_last: int | None
+    requests_used: int | None
+    requests_remaining: int | None
+
+    @property
+    def quota(self) -> OddsApiQuotaMetadata:
+        return OddsApiQuotaMetadata(
+            self.requests_last,
+            self.requests_used,
+            self.requests_remaining,
+        )
+
+
+class OddsApiProviderError(RuntimeError):
+    """A provider error whose message intentionally excludes credentials."""
+
+
 def fetch_nfl_events(
     api_key: str | None = None,
     *,
@@ -72,6 +113,9 @@ def fetch_event_player_props(
     market_keys: Sequence[str],
     api_key: str | None = None,
     *,
+    bookmakers: Sequence[str] | None = None,
+    regions: str | None = "us",
+    include_quota_metadata: bool = False,
     request_get: Callable[..., Any] | None = None,
     timeout: float = REQUEST_TIMEOUT_SECONDS,
 ) -> Any:
@@ -80,18 +124,40 @@ def fetch_event_player_props(
     event_identifier = _required_text(event_id, "event_id")
     markets = _validate_requested_market_keys(market_keys)
     key = _resolve_api_key(api_key)
-    response = (request_get or requests.get)(
-        f"{ODDS_API_BASE_URL}/{NFL_SPORT_KEY}/events/{event_identifier}/odds",
-        params={
+    normalized_bookmakers = (
+        _validate_bookmakers(bookmakers) if bookmakers is not None else None
+    )
+    if normalized_bookmakers is not None:
+        params = {
             "apiKey": key,
-            "regions": "us",
+            "bookmakers": ",".join(normalized_bookmakers),
             "markets": ",".join(markets),
             "oddsFormat": "american",
-        },
+        }
+    else:
+        normalized_regions = _required_text(regions, "regions")
+        params = {
+            "apiKey": key,
+            "regions": normalized_regions,
+            "markets": ",".join(markets),
+            "oddsFormat": "american",
+        }
+    response = (request_get or requests.get)(
+        f"{ODDS_API_BASE_URL}/{NFL_SPORT_KEY}/events/{event_identifier}/odds",
+        params=params,
         timeout=timeout,
     )
-    response.raise_for_status()
-    return response.json()
+    _raise_for_status_safely(response, key, "event player-prop odds")
+    payload = response.json()
+    if include_quota_metadata:
+        quota = _quota_metadata(response)
+        return EventPlayerPropsFetchResult(
+            payload,
+            quota.requests_last,
+            quota.requests_used,
+            quota.requests_remaining,
+        )
+    return payload
 
 
 def normalize_player_prop_odds(payload: Mapping[str, Any] | Sequence[Mapping[str, Any]]) -> pd.DataFrame:
@@ -180,6 +246,69 @@ def _validate_requested_market_keys(market_keys: Sequence[str]) -> list[str]:
     if unsupported:
         raise ValueError(f"Unsupported player-prop market keys: {unsupported}")
     return sorted(set(normalized))
+
+
+def _validate_bookmakers(bookmakers: Sequence[str]) -> tuple[str, ...]:
+    """Validate explicit provider keys without silently switching to regions."""
+
+    if isinstance(bookmakers, (str, bytes)) or not isinstance(bookmakers, Sequence):
+        raise TypeError("bookmakers must be a non-string sequence of bookmaker keys")
+    if not bookmakers:
+        raise ValueError("bookmakers must contain at least one bookmaker key")
+    normalized = tuple(_required_text(value, "bookmakers item").lower() for value in bookmakers)
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("bookmakers must not contain duplicate keys")
+    # Canonicalize known football keys in the published configuration order;
+    # unknown valid keys remain deterministic after those known keys.
+    configured = [key for key in DEFAULT_FOOTBALL_PROP_BOOKMAKERS if key in normalized]
+    extras = sorted(key for key in normalized if key not in DEFAULT_FOOTBALL_PROP_BOOKMAKERS)
+    return tuple(configured + extras)
+
+
+def _quota_metadata(response: Any) -> OddsApiQuotaMetadata:
+    headers = getattr(response, "headers", {}) or {}
+    if not isinstance(headers, Mapping):
+        raise ValueError("Odds API response headers must be a mapping when present")
+    return OddsApiQuotaMetadata(
+        requests_last=_header_credit(headers, "x-requests-last"),
+        requests_used=_header_credit(headers, "x-requests-used"),
+        requests_remaining=_header_credit(headers, "x-requests-remaining"),
+    )
+
+
+def _header_credit(headers: Mapping[str, Any], name: str) -> int | None:
+    value = next((value for key, value in headers.items() if str(key).lower() == name), None)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"Odds API header {name} must be a nonnegative integer")
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        raise ValueError(f"Odds API header {name} must be a nonnegative integer") from None
+    if parsed < 0:
+        raise ValueError(f"Odds API header {name} must be a nonnegative integer")
+    return parsed
+
+
+def _raise_for_status_safely(response: Any, api_key: str, endpoint: str) -> None:
+    try:
+        response.raise_for_status()
+    except Exception as error:
+        status = getattr(response, "status_code", None)
+        body = str(getattr(response, "text", ""))
+        safe_body = re.sub(r"https?://\S+", "[provider URL redacted]", body)
+        safe_body = re.sub(r"(?i)(api[_-]?key=)[^\s&]+", r"\1[redacted]", safe_body)
+        safe_body = safe_body.replace(api_key, "[redacted]")
+        category = "provider request failed"
+        lowered = safe_body.lower()
+        if status == 401 or "invalid api key" in lowered or "invalid api_key" in lowered:
+            category = "invalid credentials"
+        elif status == 429 or "quota" in lowered or "limit" in lowered:
+            category = "quota exhausted"
+        detail = f" ({safe_body[:200]})" if safe_body else ""
+        status_text = f" HTTP {status}" if status is not None else ""
+        raise OddsApiProviderError(f"Odds API {endpoint}{status_text}: {category}{detail}") from None
 
 
 def _validate_event_payload(payload: Mapping[str, Any] | Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:

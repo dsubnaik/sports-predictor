@@ -7,7 +7,10 @@ import pytest
 
 import football.odds.player_props as player_props
 from football.odds.player_props import (
+    DEFAULT_FOOTBALL_PROP_BOOKMAKERS,
+    EventPlayerPropsFetchResult,
     NFL_SPORT_KEY,
+    OddsApiProviderError,
     ODDS_API_BASE_URL,
     PLAYER_PROP_ODDS_COLUMNS,
     fetch_event_player_props,
@@ -33,9 +36,12 @@ def make_event(bookmakers=None):
 
 
 class FakeResponse:
-    def __init__(self, payload=None, error=None):
+    def __init__(self, payload=None, error=None, headers=None, status_code=None, text=""):
         self.payload = payload
         self.error = error
+        self.headers = headers or {}
+        self.status_code = status_code
+        self.text = text
 
     def raise_for_status(self):
         if self.error:
@@ -104,6 +110,88 @@ def test_fetch_props_validates_and_uses_deterministic_parameters():
         calls.append((args, kwargs)); return FakeResponse({"id": "event-1"})
     fetch_event_player_props(" event-1 ", ["player_rush_yds", "player_pass_yds", "player_pass_yds"], "key", request_get=fake_get, timeout=7)
     assert calls == [((f"{ODDS_API_BASE_URL}/{NFL_SPORT_KEY}/events/event-1/odds",), {"params": {"apiKey": "key", "regions": "us", "markets": "player_pass_yds,player_rush_yds", "oddsFormat": "american"}, "timeout": 7})]
+
+
+def test_explicit_bookmakers_omit_regions_and_return_optional_quota_metadata():
+    calls = []
+
+    def fake_get(*args, **kwargs):
+        calls.append((args, kwargs))
+        return FakeResponse(
+            {"id": "event-1"},
+            headers={"x-requests-last": "2", "X-Requests-Used": "17", "x-requests-remaining": "483"},
+        )
+
+    result = fetch_event_player_props(
+        "event-1", ["player_pass_yds", "player_rush_yds"], "key",
+        bookmakers=("FanDuel", "draftkings", "betrivers"),
+        include_quota_metadata=True, request_get=fake_get,
+    )
+
+    assert DEFAULT_FOOTBALL_PROP_BOOKMAKERS == ("draftkings", "fanduel", "betrivers")
+    assert isinstance(result, EventPlayerPropsFetchResult)
+    assert result.requests_last == 2
+    assert result.requests_used == 17
+    assert result.requests_remaining == 483
+    params = calls[0][1]["params"]
+    assert params["bookmakers"] == "draftkings,fanduel,betrivers"
+    assert "regions" not in params
+    assert params["markets"] == "player_pass_yds,player_rush_yds"
+    assert params["oddsFormat"] == "american"
+
+
+def test_explicit_bookmaker_validation_rejects_duplicates_before_request():
+    called = False
+    with pytest.raises(ValueError, match="duplicate"):
+        fetch_event_player_props(
+            "event", ["player_pass_yds"], "key",
+            bookmakers=("draftkings", "DRAFTKINGS"),
+            request_get=lambda *_args, **_kwargs: called,
+        )
+    assert not called
+
+
+def test_quota_headers_are_optional_or_rejected_when_malformed():
+    missing = fetch_event_player_props(
+        "event", ["player_pass_yds"], "key", include_quota_metadata=True,
+        request_get=lambda *_args, **_kwargs: FakeResponse({"id": "event"}),
+    )
+    assert missing.requests_last is None
+    assert missing.requests_used is None
+    assert missing.requests_remaining is None
+    with pytest.raises(ValueError, match="x-requests-last"):
+        fetch_event_player_props(
+            "event", ["player_pass_yds"], "key", include_quota_metadata=True,
+            request_get=lambda *_args, **_kwargs: FakeResponse({"id": "event"}, headers={"x-requests-last": "two"}),
+        )
+
+
+@pytest.mark.parametrize(("status", "body", "category"), [
+    (429, "quota exceeded", "quota exhausted"),
+    (401, "invalid api key secret-key", "invalid credentials"),
+])
+def test_provider_errors_are_safe_and_categorized(status, body, category):
+    with pytest.raises(OddsApiProviderError, match=category) as caught:
+        fetch_event_player_props(
+            "event", ["player_pass_yds"], "secret-key",
+            request_get=lambda *_args, **_kwargs: FakeResponse(
+                error=RuntimeError("provider failed"), status_code=status, text=body
+            ),
+        )
+    assert "secret-key" not in str(caught.value)
+
+
+def test_provider_error_redacts_credential_bearing_url():
+    with pytest.raises(OddsApiProviderError) as caught:
+        fetch_event_player_props(
+            "event", ["player_pass_yds"], "secret-key",
+            request_get=lambda *_args, **_kwargs: FakeResponse(
+                error=RuntimeError("provider failed"), status_code=401,
+                text="https://example.test/odds?apiKey=secret-key&foo=bar",
+            ),
+        )
+    assert "secret-key" not in str(caught.value)
+    assert "https://" not in str(caught.value)
 
 
 @pytest.mark.parametrize("api_key", [None, "", "  "])

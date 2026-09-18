@@ -14,15 +14,13 @@ from football.ui.rb_research_page import render_football_rb_research_page
 st.set_page_config(page_title="Sports Predictor", layout="wide")
 
 pages = {
-    "Baseball": [
-        st.Page(render_baseball_page, title="Baseball Research", default=True),
-    ],
     "Football": [
-        st.Page(render_football_research_page, title="Football Research"),
+        st.Page(render_football_research_page, title="Football Research", default=True),
         st.Page(render_football_qb_research_page, title="QB Research"),
         st.Page(render_football_rb_research_page, title="RB Research"),
         st.Page(render_decision_history_page, title="Decision History"),
     ],
+    "Baseball": [st.Page(render_baseball_page, title="Baseball Research")],
 }
 
 st.navigation(pages, position="top").run()

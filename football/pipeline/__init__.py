@@ -13,6 +13,11 @@ from football.pipeline.build_weekly_player_prop_odds import (
     WeeklyPlayerPropOddsResult,
     build_weekly_player_prop_odds,
 )
+from football.pipeline.build_selected_game_player_prop_odds import (
+    ImmutableOddsTable,
+    SelectedGamePlayerPropOddsResult,
+    build_selected_game_player_prop_odds,
+)
 
 __all__ = [
     "WeeklyQBResearchResult",
@@ -22,4 +27,7 @@ __all__ = [
     "WEEKLY_PLAYER_PROP_ODDS_COLUMNS",
     "WeeklyPlayerPropOddsResult",
     "build_weekly_player_prop_odds",
+    "ImmutableOddsTable",
+    "SelectedGamePlayerPropOddsResult",
+    "build_selected_game_player_prop_odds",
 ]

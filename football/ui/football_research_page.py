@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from typing import Any, Callable
+import re
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 import pandas as pd
@@ -12,6 +14,9 @@ from football.ui.qb_research_page import load_qb_research
 from football.ui.rb_research_page import load_rb_research
 from football.ui.qb_research_view import default_history_season
 from football.ui.football_research_view import FootballResearchResult, prepare_game_research
+from football.pipeline import build_selected_game_player_prop_odds
+from football.odds import DEFAULT_FOOTBALL_PROP_BOOKMAKERS
+from football.data.build_schedule_dataset import OUTPUT_COLUMNS as SCHEDULE_COLUMNS
 from football.pipeline.build_weekly_player_prop_odds import WEEKLY_PLAYER_PROP_ODDS_COLUMNS
 from football.ui.qb_research_view import build_qb_decision_outcome_options, build_qb_pending_decision
 from football.ui.rb_research_view import build_rb_decision_outcome_options, build_rb_pending_decision
@@ -19,27 +24,51 @@ from football.decision_database import open_local_decision_database
 from football.decisions import record_decision, DuplicateDecisionError, DecisionStoreError, DecisionValidationError
 
 
-def render_football_research_page(*, streamlit_module: Any | None = None, qb_report_loader: Callable[..., Any] = load_qb_research, rb_report_loader: Callable[..., Any] = load_rb_research, clock: Callable[[], object] | None = None, database_opener: Callable = open_local_decision_database, decision_recorder: Callable = record_decision) -> None:
+def default_report_inputs(current_date: date) -> dict[str, object]:
+    """Return deterministic regular-season defaults; opener is first September Thursday."""
+    season = current_date.year if current_date.month >= 2 else current_date.year - 1
+    first_september_thursday = date(season, 9, 1)
+    first_september_thursday = first_september_thursday.replace(day=1 + ((3 - first_september_thursday.weekday()) % 7))
+    # NFL Week 1 is the Thursday after Labor Day, i.e. the second September Thursday.
+    opener = first_september_thursday.replace(day=first_september_thursday.day + 7)
+    if current_date < opener:
+        week = 1
+    elif current_date > date(season, 1, 10) and current_date.month == 1:
+        week = 18
+    else:
+        week = min(18, ((current_date - opener).days // 7) + 1)
+    return {"report_season": season, "report_week": week, "as_of_date": current_date, "history_season": default_history_season(season, week)}
+
+
+def render_football_research_page(*, streamlit_module: Any | None = None, qb_report_loader: Callable[..., Any] = load_qb_research, rb_report_loader: Callable[..., Any] = load_rb_research, selected_game_odds_loader: Callable[..., Any] = build_selected_game_player_prop_odds, clock: Callable[[], object] | None = None, database_opener: Callable = open_local_decision_database, decision_recorder: Callable = record_decision) -> None:
     """Render only the deliberately submitted combined report; no selector reloads."""
     ui, now = streamlit_module or st, clock or (lambda: datetime.now(timezone.utc))
     ui.title("Football Research")
-    ui.info("Game-centered research context, not a prediction or recommendation.")
-    today = date.today()
-    with ui.form("football_research_form"):
-        columns = ui.columns([1, 1, 1.3, 1, 1.3])
-        with columns[0]: season = ui.number_input("Report season", min_value=1999, max_value=today.year + 1, value=today.year, step=1)
-        with columns[1]: week = ui.number_input("Report week", min_value=1, max_value=22, value=1, step=1)
-        with columns[2]: as_of = ui.date_input("As-of date", value=today)
-        with columns[3]: history = ui.number_input("History season", min_value=1999, max_value=int(season), value=default_history_season(int(season), int(week)), step=1)
-        with columns[4]: ui.write(""); submitted = ui.form_submit_button("Generate Football Report", type="primary")
+    ui.caption("Research context only — not a prediction or recommendation.")
+    today = now().date() if isinstance(now(), datetime) else date.today()
+    defaults = ui.session_state.setdefault("football_research_default_inputs", default_report_inputs(today))
+    has_report = "football_research_result" in ui.session_state
+    with ui.expander("Report settings", expanded=not has_report):
+        with ui.form("football_research_form"):
+            columns = ui.columns([1, 1, 1.3, 1, 1.3])
+            with columns[0]: season = ui.number_input("Report season", min_value=1999, max_value=today.year + 1, value=defaults["report_season"], step=1)
+            with columns[1]: week = ui.number_input("Report week", min_value=1, max_value=22, value=defaults["report_week"], step=1)
+            with columns[2]: as_of = ui.date_input("As-of date", value=defaults["as_of_date"])
+            with columns[3]: history = ui.number_input("History season", min_value=1999, max_value=int(season), value=defaults["history_season"], step=1)
+            label = "Refresh Football Research" if has_report else "Generate Football Research"
+            with columns[4]: ui.write(""); submitted = ui.form_submit_button(label, type="primary")
     if submitted:
         inputs = {"report_season": int(season), "report_week": int(week), "as_of_date": as_of, "history_season": int(history)}
         try:
-            with ui.spinner("Loading QB and RB research with current sportsbook data..."):
-                combined = FootballResearchResult(qb_report_loader(**inputs), rb_report_loader(**inputs))
+            with ui.spinner("Loading QB and RB research..."):
+                combined = FootballResearchResult(qb_report_loader(**inputs, include_player_props=False), rb_report_loader(**inputs, include_player_props=False))
+            previous = ui.session_state.get("football_research_game_odds", {})
+            previous_contexts = ui.session_state.get("football_research_game_odds_contexts", {})
             ui.session_state["football_research_inputs"] = inputs
             ui.session_state["football_research_result"] = combined
-            ui.session_state["football_research_odds_retrieved_at"] = now()
+            retained, contexts = _compatible_game_odds(previous, previous_contexts, combined, inputs)
+            ui.session_state["football_research_game_odds"] = retained
+            ui.session_state["football_research_game_odds_contexts"] = contexts
         except Exception as error:  # Existing loaders preserve their specific public errors.
             ui.error(f"Could not refresh football research: {error}")
     inputs = ui.session_state.get("football_research_inputs")
@@ -48,17 +77,42 @@ def render_football_research_page(*, streamlit_module: Any | None = None, qb_rep
         ui.info("No live data loads until Generate Football Report is clicked.")
         ui.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
         return
-    games = prepare_game_research(combined, ui.session_state.get("football_research_odds_retrieved_at"))
-    ui.caption(f"Report season {inputs['report_season']}, Week {inputs['report_week']}; historical season {inputs['history_season']}.")
+    snapshots = ui.session_state.setdefault("football_research_game_odds", {})
+    line_mode_key = "football_research_line_filter"
+    line_mode = ui.session_state.get(line_mode_key, "Balanced lines")
+    games = prepare_game_research(combined, None, snapshots, "balanced" if line_mode == "Balanced lines" else "all")
+    ui.caption(f"{inputs['report_season']} • Week {inputs['report_week']} • History {inputs['history_season']}")
     if not games:
         ui.info("No scheduled games were found for these report inputs.")
+    game_by_id = {game.game_id: game for game in games}
+    selected_key = "football_research_selected_game_id"
+    selected_id = ui.session_state.get(selected_key)
+    if selected_id not in game_by_id:
+        selected_id = games[0].game_id if games else None
+        ui.session_state[selected_key] = selected_id
+    if games:
+        labels = {game.game_id: _game_label(game) for game in games}
+        if hasattr(ui, "pills"):
+            selected_id = ui.pills("Selected game", list(game_by_id), format_func=lambda value: labels[value], selection_mode="single", default=selected_id, key=selected_key)
+        else:
+            selected_id = ui.selectbox("Selected game", list(game_by_id), format_func=lambda value: labels[value], key=selected_key)
     for game in games:
+        if game.game_id != selected_id:
+            continue
         away_name = game.away_team.team if game.away_team else "Unresolved away"
         home_name = game.home_team.team if game.home_team else "Unresolved home"
         with ui.expander(f"{away_name} at {home_name}"):
-            ui.markdown(f"### {away_name} at {home_name}")
+            kickoff = format_kickoff_central(game.kickoff)
+            ui.markdown(f"### {away_name} at {home_name}" + (f" — {kickoff}" if kickoff else ""))
             ui.caption(f"Game ID: {game.game_id}")
-            ui.caption(f"Current sportsbook lines retrieved: {ui.session_state.get('football_research_odds_retrieved_at')}")
+            snapshot = snapshots.get(game.game_id)
+            _render_game_odds_controls(ui, game, snapshot, combined, inputs, selected_game_odds_loader, snapshots)
+            snapshots = ui.session_state.get("football_research_game_odds", {})
+            snapshot = snapshots.get(game.game_id)
+            if snapshot is not None:
+                line_mode = ui.selectbox("Displayed lines", ["Balanced lines", "All available lines"], key=line_mode_key)
+                games = prepare_game_research(combined, None, snapshots, "balanced" if line_mode == "Balanced lines" else "all")
+                game = next(value for value in games if value.game_id == game.game_id)
             for team in (game.away_team, game.home_team):
                 if team is None: continue
                 with ui.container(border=True):
@@ -70,7 +124,8 @@ def render_football_research_page(*, streamlit_module: Any | None = None, qb_rep
                         if person.visibility_reason == "meaningful_recent_share": ui.caption("Shared backfield: meaningful recent role.")
                         if person.visibility_reason == "meaningful_season_share_fallback": ui.caption("Shared backfield: meaningful season role.")
                         if person.unresolved: ui.info("Participant is unresolved; no sportsbook line can be associated.")
-                        elif not person.props: ui.caption("No matched current sportsbook line.")
+                        elif not person.props:
+                            ui.caption("No balanced lines from the selected sportsbooks. View all available lines." if person.has_filtered_out_props else "No matched current sportsbook line.")
                         else: ui.dataframe(_line_display(person.props), use_container_width=True, hide_index=True)
                         if person.decision_rows:
                             _render_decision(ui, person, game, inputs, ui.session_state.get("football_research_odds_retrieved_at"), database_opener, decision_recorder, now)
@@ -82,6 +137,108 @@ def render_football_research_page(*, streamlit_module: Any | None = None, qb_rep
                 with ui.expander("Data diagnostics"):
                     for diagnostic in game.diagnostics: ui.caption(diagnostic.message)
     ui.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
+
+
+def _render_game_odds_controls(ui: Any, game: Any, snapshot: Any, combined: FootballResearchResult, inputs: dict, loader: Callable[..., Any], snapshots: dict) -> None:
+    """Render the only two page actions permitted to invoke the paid loader."""
+    if snapshot is None:
+        ui.caption("Sportsbook lines are not loaded. Loading makes one paid selected-game odds request.")
+        action_label = "Load lines for this game"
+    else:
+        ui.caption(f"Current sportsbook lines retrieved: {snapshot.retrieved_at}")
+        ui.caption("Sportsbooks: DraftKings, FanDuel, BetRivers.")
+        quota = snapshot.quota
+        values = []
+        if quota.requests_last is not None: values.append(f"last request: {quota.requests_last} credits")
+        if quota.requests_remaining is not None: values.append(f"remaining: {quota.requests_remaining}")
+        if quota.requests_used is not None: values.append(f"total used: {quota.requests_used}")
+        if values: ui.caption("Quota — " + "; ".join(values))
+        action_label = "Refresh lines for this game"
+    clicked = ui.button(action_label, key=f"football_research_game_odds|{game.game_id}") if hasattr(ui, "button") else False
+    if not clicked:
+        return
+    try:
+        schedule, qbs, rbs = _selected_game_inputs(combined, game.game_id, inputs)
+        result = loader(game.game_id, schedule, qbs, rbs, inputs["report_season"], inputs["report_week"])
+        updated = dict(snapshots)
+        updated[game.game_id] = result
+        ui.session_state["football_research_game_odds"] = updated
+        ui.session_state.setdefault("football_research_game_odds_contexts", {})[game.game_id] = _game_context(combined, inputs).get(game.game_id)
+    except Exception as error:
+        if snapshot is None:
+            ui.error(f"Could not load lines for this game: {_safe_error(error)}")
+        else:
+            ui.error(f"Could not refresh lines for this game; previously retrieved lines remain displayed: {_safe_error(error)}")
+
+
+def _selected_game_inputs(combined: FootballResearchResult, game_id: str, inputs: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    frames = []
+    for source, position in ((combined.qb_result, "QB"), (combined.rb_result, "RB")):
+        if source is None or source.summary.empty: continue
+        summary = source.summary.loc[source.summary["game_id"].eq(game_id)].copy(deep=True)
+        if summary.empty: continue
+        frame = pd.DataFrame({"season": inputs["report_season"], "week": inputs["report_week"], "game_id": summary["game_id"], "game_date": summary["game_date"], "game_time": summary["game_time"], "team": summary["team"], "opponent": summary["opponent"], "home_away": summary["home_away"], "home_score": pd.NA, "away_score": pd.NA})
+        frames.append(frame)
+    schedule = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["game_id", "team"]).copy()
+    # Pipeline summaries may omit report fields; the selected loader receives
+    # canonical report inputs separately, so fill them at the caller boundary.
+    qbs = combined.qb_result.summary.loc[combined.qb_result.summary["game_id"].eq(game_id)].copy(deep=True) if combined.qb_result is not None and "game_id" in combined.qb_result.summary else pd.DataFrame(columns=["game_id", "team", "expected_player_id", "expected_player_name"])
+    rbs = combined.rb_result.summary.loc[combined.rb_result.summary["game_id"].eq(game_id)].copy(deep=True) if combined.rb_result is not None and "game_id" in combined.rb_result.summary else pd.DataFrame(columns=["game_id", "team", "player_id", "player_name"])
+    return schedule.loc[:, SCHEDULE_COLUMNS], qbs, rbs
+
+
+def _game_context(result: FootballResearchResult, inputs: dict) -> dict[str, tuple]:
+    games = prepare_game_research(result, None, {})
+    participants: dict[str, list[tuple[str, str]]] = {}
+    if result.qb_result is not None:
+        for _, row in result.qb_result.summary.copy(deep=True).iterrows():
+            if pd.notna(row.get("expected_player_id")):
+                participants.setdefault(str(row.get("game_id")), []).append((str(row.get("expected_player_id")).strip(), "QB"))
+    if result.rb_result is not None:
+        for _, row in result.rb_result.summary.copy(deep=True).iterrows():
+            if pd.notna(row.get("player_id")):
+                participants.setdefault(str(row.get("game_id")), []).append((str(row.get("player_id")).strip(), "RB"))
+    return {game.game_id: (inputs["report_season"], inputs["report_week"], game.away_team.team if game.away_team else None, game.home_team.team if game.home_team else None, tuple(sorted(set(participants.get(game.game_id, [])))), tuple(DEFAULT_FOOTBALL_PROP_BOOKMAKERS)) for game in games}
+
+
+def _compatible_game_odds(previous: dict, previous_contexts: dict, result: FootballResearchResult, inputs: dict) -> tuple[dict, dict]:
+    contexts = _game_context(result, inputs)
+    retained = {game_id: snapshot for game_id, snapshot in previous.items() if game_id in contexts and previous_contexts.get(game_id) == contexts[game_id] and getattr(snapshot, "markets", ()) == ("player_pass_yds", "player_rush_yds") and getattr(snapshot, "bookmakers", ()) == tuple(DEFAULT_FOOTBALL_PROP_BOOKMAKERS)}
+    return retained, {game_id: contexts[game_id] for game_id in retained}
+
+
+def _safe_error(error: Exception) -> str:
+    message = str(error)
+    message = re.sub(r"https?://\S+", "[provider URL redacted]", message)
+    return re.sub(r"(?i)(api[_-]?key=)[^\s&]+", r"\1[redacted]", message)
+
+
+def _game_label(game: Any) -> str:
+    away = game.away_team.team if game.away_team else "Unresolved away"
+    home = game.home_team.team if game.home_team else "Unresolved home"
+    kickoff = format_kickoff_central(game.kickoff)
+    return f"{away} at {home}" + (f" — {kickoff}" if kickoff else "")
+
+
+def format_kickoff_central(value: object) -> str | None:
+    """Return a DST-aware twelve-hour Central kickoff label, or ``None``.
+
+    Normalized schedule date/time values are New York wall-clock values. Aware
+    provider timestamps are converted directly to America/Chicago.
+    """
+    if value is None or value is pd.NA:
+        return None
+    try:
+        kickoff = pd.Timestamp(value)
+        if pd.isna(kickoff):
+            return None
+        if kickoff.tzinfo is None:
+            kickoff = kickoff.tz_localize(ZoneInfo("America/New_York"), ambiguous="raise", nonexistent="raise")
+        central = kickoff.tz_convert(ZoneInfo("America/Chicago"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    hour = central.hour % 12 or 12
+    return f"{central.strftime('%a')} {hour}:{central.strftime('%M %p')} CT"
 
 
 def _line_display(props: tuple[Any, ...]) -> pd.DataFrame:
