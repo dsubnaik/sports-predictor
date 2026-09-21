@@ -11,6 +11,15 @@ from football.training.qb_passing_yards_baseline import (
     fit_qb_passing_yards_baseline,
     predict_qb_passing_yards_baseline,
 )
+from football.training.audit_qb_passing_yards_dataset import (
+    QBPassingYardsDatasetAudit,
+    PartitionSummary,
+    SampleSizeSummary,
+    TrainingFeatureSummary,
+    TrainingTargetSummary,
+    ValidationBaselineAudit,
+    audit_qb_passing_yards_dataset,
+)
 
 __all__ = [
     "QBPassingYardsDatasetSplit",
@@ -20,4 +29,11 @@ __all__ = [
     "evaluate_qb_passing_yards_predictions",
     "fit_qb_passing_yards_baseline",
     "predict_qb_passing_yards_baseline",
+    "QBPassingYardsDatasetAudit",
+    "PartitionSummary",
+    "SampleSizeSummary",
+    "TrainingFeatureSummary",
+    "TrainingTargetSummary",
+    "ValidationBaselineAudit",
+    "audit_qb_passing_yards_dataset",
 ]
