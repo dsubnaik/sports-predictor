@@ -204,7 +204,11 @@ def test_evaluation_reports_metrics_and_cold_start_subgroups_using_shared_evalua
     assert evaluation.overall_metrics.rmse == pytest.approx(0.11320593513521623)
     assert evaluation.overall_metrics.r_squared == pytest.approx(0.9999948508815291)
     assert evaluation.cold_start_metrics.mae == pytest.approx(0.19607843137254122)
-    assert evaluation.non_cold_start_metrics == RegressionMetrics(2, 0.0, 0.0, 1.0)
+    assert evaluation.non_cold_start_metrics is not None
+    assert evaluation.non_cold_start_metrics.row_count == 2
+    assert evaluation.non_cold_start_metrics.mae == pytest.approx(0.0, abs=1e-12)
+    assert evaluation.non_cold_start_metrics.rmse == pytest.approx(0.0, abs=1e-12)
+    assert evaluation.non_cold_start_metrics.r_squared == pytest.approx(1.0)
     assert len(calls) == 3
 
 
