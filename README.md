@@ -105,9 +105,8 @@ This more closely represents the real-world scenario of training on historical g
 ## NFL QB Passing-Yards Modeling
 
 The NFL quarterback passing-yards work follows the same baseline-first,
-time-aware approach. It is documented here before Linear Regression begins so
-future model comparisons use the same population, boundaries, and validation
-standard.
+time-aware approach. It is documented here so future model comparisons use the
+same population, boundaries, and validation standard.
 
 ### Completed Components
 
@@ -227,42 +226,115 @@ modeling-population consideration, not a structural audit failure. Any future
 population experiment must remain leakage-safe and cannot select starters
 using target-game attempts.
 
+### Linear Regression Validation
+
+The first model uses `sklearn.linear_model.LinearRegression` with default
+parameters. It was trained once on 2021-2024 target rows and evaluated on the
+fixed 2025 validation population. The fitted pipeline keeps training-only
+preprocessing and the estimator together.
+
+The model uses exactly the public QB passing-yards `FEATURE_COLUMNS` from the
+dataset builder. It uses neither identifiers, player names, team or opponent
+labels, home/away, sportsbook lines, nor target values as inputs. There is no
+feature scaling. Permitted missing numeric history is median-imputed using the
+training partition only; the existing boolean missing-history flags are
+validated and passed through unchanged.
+
+Included point-in-time feature families are:
+
+* QB history: season and last-three passing-yards averages; season and
+  last-three passing-attempt averages; season and last-three history sample
+  sizes; and the missing-QB-history flag.
+* Opponent defense: season and last-three passing-yards-allowed averages;
+  passing attempts allowed; season and last-three defensive history sample
+  sizes; the missing-defense-history flag; and point-in-time matchup rank.
+
+Every historical feature contains only information available before its target
+game. The model and preprocessing were fitted using 2021-2024 only and stayed
+fixed throughout 2025 validation. Thus, a Week 10 row can use QB and defensive
+information through Week 9, but the model is not retrained after each 2025
+week. This is a fixed-season model with weekly updated point-in-time features;
+expanding-window weekly retraining remains a later experiment.
+
+| Group | Rows | MAE | RMSE | R² |
+| --- | ---: | ---: | ---: | ---: |
+| Overall | 664 | 66.00 | 82.00 | 0.3609 |
+| Cold start | 51 | 76.30 | 82.67 | -0.3948 |
+| Non-cold-start | 613 | 65.14 | 81.94 | 0.2852 |
+
+Compared with the historical-average baseline on the identical validation
+rows, Linear Regression improved MAE by 7.76 yards, RMSE by 14.60 yards, and
+R² by 0.2479. Using `baseline - Linear Regression` for MAE and RMSE, and
+`Linear Regression - baseline` for R², positive values mean improvement. MAE
+decreased by about 10.5% and RMSE by about 15.1%.
+
+An MAE of 66.00 means an average absolute error of about 66 passing yards per
+eligible QB-game. The result is a meaningful improvement over the simple
+baseline, but remains an experimental benchmark rather than a production
+quality betting predictor. It applies to all eligible QB rows, including
+backups and low-volume passers; it is not performance restricted to likely
+starters or players with sportsbook props. A controlled feature-ablation
+experiment is required before attributing this improvement specifically to
+opponent defense. Lower MAE/RMSE and higher R² are better.
+
+For reproducibility, the fitted intercept was 98.6586. Selected training-only
+median imputations were QB season passing yards 222.33, QB last-three passing
+yards 219.67, QB season passing attempts 31.2, QB last-three passing attempts
+31.0, defense season passing yards allowed 232.64, defense last-three passing
+yards allowed 231.33, and defensive matchup rank 17.0. No numerical-
+conditioning warnings occurred. Coefficients are available through the public
+model report for reproducibility; they are not feature importance.
+
 ### 2026 Test-Set Policy
 
-> **2026 is held out for final model evaluation.** During the smoke run, no
-> test predictions, target summaries, residuals, metrics, or outcome-derived
-> subgroup analyses were inspected. Test structural and feature-availability
-> diagnostics are allowed. Do not evaluate the test set while choosing
-> preprocessing, features, hyperparameters, populations, or models.
+> **2026 is held out for final model evaluation.** The original smoke-run
+> snapshot had 73 test rows across 42 QBs and 31 games in Weeks 1-2. During the
+> later Linear Regression validation run, the live public feed had updated to
+> 76 rows across 43 QBs and 32 games in the same weeks. These are
+> time-dependent data-availability snapshots, not dataset implementation
+> changes.
+
+No 2026 rows were transformed or predicted during Linear Regression
+training/validation. No 2026 targets, predictions, residuals, metrics, or
+outcome summaries were inspected. All model results reported here are from
+2025 validation. The 2026 holdout remains locked for final evaluation and must
+not be used while selecting preprocessing, features, populations,
+hyperparameters, or models. Test structural and feature-availability
+diagnostics remain allowed.
 
 ### Results Ledger
 
 | Model | Validation population | MAE | RMSE | R² | Status |
 | --- | --- | ---: | ---: | ---: | --- |
 | Historical average | All 2025 eligible QB rows | 73.76 | 96.60 | 0.1130 | Official baseline |
+| Linear Regression | All 2025 eligible QB rows | 66.00 | 82.00 | 0.3609 | Current leader |
 
 ### Planned QB Modeling Stages
 
-1. Training-only preprocessing for missing history.
-2. Initial Linear Regression using existing leakage-safe features.
-3. Random Forest.
-4. Gradient Boosting/XGBoost.
-5. Consistent validation comparison and error analysis.
-6. Leakage-safe QB-population experiments.
-7. Defensive-strength representation experiments.
-8. Opponent-adjusted QB form.
-9. Defensive-style data investigation using blitz, pressure, man coverage,
+1. [x] Training-only preprocessing for missing history.
+2. [x] Initial Linear Regression using existing leakage-safe features.
+3. [ ] Random Forest (next model).
+4. [ ] Gradient Boosting/XGBoost after Random Forest.
+5. [ ] Consistent validation comparison and error analysis.
+6. [ ] Leakage-safe QB-population experiments.
+7. [ ] Defense-feature ablation and defensive-strength representation
+   experiments.
+8. [ ] Opponent-adjusted QB form.
+9. [ ] Defensive-style data investigation using blitz, pressure, man coverage,
    and zone coverage where reliable historical data exists.
-10. Defensive-style similarity/clustering experiments.
-11. Final model selection.
-12. One-time held-out 2026 test evaluation.
-13. Model persistence, weekly prediction pipeline, Streamlit projections, and
-    sportsbook comparison.
-14. RB rushing-yards modeling after the QB pipeline is established.
+10. [ ] Defensive-style similarity/clustering experiments.
+11. [ ] Final model selection.
+12. [ ] One-time held-out 2026 test evaluation.
+13. [ ] Model persistence, weekly inference, Streamlit projections, and
+    sportsbook-line comparison.
+14. [ ] RB rushing-yards modeling after the QB pipeline is established.
 
 Defensive tiers are not fixed in advance. Continuous values, thirds,
 quartiles, top/bottom groups, or data-derived clusters may be compared using
 chronological validation.
+
+Paid historical sportsbook lines are not currently part of model results. They
+may be evaluated later for projection-versus-line backtesting.
 
 ## Testing
 
