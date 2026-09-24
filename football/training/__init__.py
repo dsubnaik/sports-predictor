@@ -20,6 +20,18 @@ from football.training.audit_qb_passing_yards_dataset import (
     ValidationBaselineAudit,
     audit_qb_passing_yards_dataset,
 )
+from football.training.qb_passing_yards_linear_regression import (
+    HistoricalAverageComparison,
+    LinearRegressionCoefficient,
+    NumericImputationSummary,
+    QBPassingYardsLinearRegressionEvaluation,
+    QBPassingYardsLinearRegressionModel,
+    QBPassingYardsLinearRegressionValidation,
+    evaluate_qb_passing_yards_linear_regression,
+    fit_qb_passing_yards_linear_regression,
+    predict_qb_passing_yards_linear_regression,
+    train_and_validate_qb_passing_yards_linear_regression,
+)
 
 __all__ = [
     "QBPassingYardsDatasetSplit",
@@ -36,4 +48,14 @@ __all__ = [
     "TrainingTargetSummary",
     "ValidationBaselineAudit",
     "audit_qb_passing_yards_dataset",
+    "HistoricalAverageComparison",
+    "LinearRegressionCoefficient",
+    "NumericImputationSummary",
+    "QBPassingYardsLinearRegressionEvaluation",
+    "QBPassingYardsLinearRegressionModel",
+    "QBPassingYardsLinearRegressionValidation",
+    "evaluate_qb_passing_yards_linear_regression",
+    "fit_qb_passing_yards_linear_regression",
+    "predict_qb_passing_yards_linear_regression",
+    "train_and_validate_qb_passing_yards_linear_regression",
 ]
