@@ -32,6 +32,18 @@ from football.training.qb_passing_yards_linear_regression import (
     predict_qb_passing_yards_linear_regression,
     train_and_validate_qb_passing_yards_linear_regression,
 )
+from football.training.qb_passing_yards_random_forest import (
+    QBPassingYardsRandomForestEvaluation,
+    QBPassingYardsRandomForestModel,
+    QBPassingYardsRandomForestValidation,
+    RandomForestComparison,
+    RandomForestFeatureImportance,
+    RandomForestParameters,
+    evaluate_qb_passing_yards_random_forest,
+    fit_qb_passing_yards_random_forest,
+    predict_qb_passing_yards_random_forest,
+    train_and_validate_qb_passing_yards_random_forest,
+)
 
 __all__ = [
     "QBPassingYardsDatasetSplit",
@@ -58,4 +70,14 @@ __all__ = [
     "fit_qb_passing_yards_linear_regression",
     "predict_qb_passing_yards_linear_regression",
     "train_and_validate_qb_passing_yards_linear_regression",
+    "QBPassingYardsRandomForestEvaluation",
+    "QBPassingYardsRandomForestModel",
+    "QBPassingYardsRandomForestValidation",
+    "RandomForestComparison",
+    "RandomForestFeatureImportance",
+    "RandomForestParameters",
+    "evaluate_qb_passing_yards_random_forest",
+    "fit_qb_passing_yards_random_forest",
+    "predict_qb_passing_yards_random_forest",
+    "train_and_validate_qb_passing_yards_random_forest",
 ]
