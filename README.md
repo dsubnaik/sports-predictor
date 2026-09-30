@@ -115,7 +115,10 @@ same population, boundaries, and validation standard.
 * A historical-average baseline with a training-only cold-start fallback.
 * A structured dataset-quality and baseline-validation audit.
 * A read-only real-data smoke run using public nflverse data.
-* Fixed, reproducible Linear Regression and Random Forest benchmarks.
+* Fixed, reproducible Linear Regression, Random Forest, sklearn Gradient
+  Boosting, and XGBoost benchmarks.
+* A consistent, leakage-safe validation comparison and error-analysis report
+  for all five completed models.
 * A held-out, outcome-blind test set. Test outcomes are not used while models
   are developed.
 
@@ -488,6 +491,109 @@ that a feature is valuable.
 | defense_last3_history_games | 0.030061 |
 | defense_season_passing_attempts_allowed_avg | 0.029140 |
 
+### Validation Comparison and Error Analysis
+
+`football/training/qb_passing_yards_model_comparison.py` provides
+`compare_qb_passing_yards_models(dataset_split)`. It fits all five completed
+models using only `split.train`, then predicts and analyzes only canonicalized
+`split.validation`. It never accesses `split.test`. Every model is evaluated
+on the same validation keys: `season`, `week`, `game_id`, and `player_id`.
+The result is an immutable aggregate report; it does not retain input
+DataFrames or row-level records.
+
+The comparison uses signed error defined as `prediction - actual`, so a
+positive mean signed error denotes average overprediction. Cold start remains
+exactly a missing `qb_season_passing_yards_avg`. The component reports overall
+and cold-start diagnostics, point-in-time feature slices, error distributions,
+row-level closest-prediction counts, pairwise MAE differences, and prediction
+disagreement. It neither tunes models nor selects one.
+
+The comparison used source-history seasons 2020-2026 and modeling targets
+2021-2026: 2,615 training rows from 2021-2024 and 664 validation rows from
+2025. The test boundary is 2026. No 2026 rows were accessed, transformed,
+predicted, scored, or outcome-inspected by either the comparison component or
+its temporary validation runner.
+
+| Model | MAE | RMSE | R² | Mean signed error |
+| --- | ---: | ---: | ---: | ---: |
+| Historical average | 73.76 | 96.60 | 0.1130 | +5.82 |
+| Linear Regression | 66.00 | 82.00 | 0.3609 | +5.48 |
+| Random Forest | 65.57 | 83.57 | 0.3361 | +3.86 |
+| sklearn Gradient Boosting | 64.27 | 81.66 | 0.3662 | +3.92 |
+| XGBoost | 64.62 | 82.08 | 0.3596 | +5.84 |
+
+All five models overpredicted slightly on average. sklearn Gradient Boosting
+remains the aggregate validation leader on MAE, RMSE, and R². This is not
+final model selection.
+
+| Model | Cold MAE / RMSE / R² / bias | Non-cold MAE / RMSE / R² / bias |
+| --- | --- | --- |
+| Historical average | 150.72 / 161.10 / -4.2968 / +145.10 | 67.36 / 89.16 / 0.1538 / -5.77 |
+| Linear Regression | 76.30 / 82.67 / -0.3948 / +39.80 | 65.14 / 81.94 / 0.2852 / +2.62 |
+| Random Forest | 66.67 / 82.68 / -0.3950 / +22.84 | 65.48 / 83.65 / 0.2552 / +2.28 |
+| sklearn Gradient Boosting | 66.04 / 79.02 / -0.2743 / +26.87 | 64.12 / 81.88 / 0.2863 / +2.02 |
+| XGBoost | 67.86 / 81.09 / -0.3420 / +27.16 | 64.35 / 82.16 / 0.2813 / +4.07 |
+
+There are 51 cold-start validation rows and 613 non-cold-start rows.
+Gradient Boosting has the best cold-start and non-cold-start aggregate metrics
+among the completed models. Cold-start R² is negative for every model, making
+it a difficult subgroup; that does not establish that its predictions contain
+no value. These subgroup results are descriptive, not causal.
+
+AE means absolute error in passing yards. Under and over counts use a narrow
+`1e-12` approximately-exact tolerance.
+
+| Model | Median AE | 75th AE | 90th AE | Max AE | Under | Over | Exact |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Historical average | 57.00 | 107.95 | 171.98 | 320.00 | 328 | 327 | 9 |
+| Linear Regression | 57.76 | 87.96 | 133.62 | 281.08 | 311 | 353 | 0 |
+| Random Forest | 53.42 | 91.01 | 138.51 | 304.45 | 312 | 352 | 0 |
+| sklearn Gradient Boosting | 53.75 | 89.20 | 135.31 | 295.34 | 306 | 358 | 0 |
+| XGBoost | 51.63 | 89.59 | 133.33 | 286.78 | 303 | 361 | 0 |
+
+XGBoost has the lowest median and 90th-percentile absolute error, while Linear
+Regression has the lowest maximum absolute error. Gradient Boosting has the
+best aggregate MAE/RMSE despite not leading every distribution statistic.
+These differences support additional population and feature analysis rather
+than immediate final selection.
+
+For a row-level win, a model must have the smallest absolute error on that
+validation row. Ties within `1e-12` receive a win for every tied model; wins
+therefore do not replace MAE, RMSE, R², or distribution diagnostics.
+
+| Model | Wins |
+| --- | ---: |
+| Historical average | 182 |
+| Linear Regression | 120 |
+| Random Forest | 169 |
+| sklearn Gradient Boosting | 92 |
+| XGBoost | 101 |
+
+The historical baseline can be closest on many individual rows while remaining
+worst overall because its losing errors are substantially larger. Its
+cold-start MAE, 90th-percentile error, and maximum error show that instability.
+
+Pairwise MAE difference is defined as the first model's MAE minus the second
+model's MAE, so a positive value favors the second model. Mean absolute
+prediction disagreement ranges from 8.09 yards for Gradient Boosting versus
+XGBoost to 34.62 yards for the historical baseline versus Random Forest. Under
+that sign convention, Gradient Boosting improves MAE over Linear Regression by
+1.73 yards and over XGBoost by 0.35 yards.
+
+The report defines validation slices only from point-in-time pregame features:
+
+* Cold versus non-cold starts.
+* QB season-history depth: 0, 1-3, 4-8, and 9+ games.
+* QB recent-history depth: 0, 1, 2, and 3 games.
+* Defense season-history depth: 0, 1-3, 4-8, and 9+ games.
+* Defensive matchup-rank tiers: 1-10, 11-22, 23-32, and missing.
+
+XGBoost has the lowest MAE for QBs with one to three season-history games,
+when one recent-history game is available, and in the defense four-to-eight-
+game history slice. Gradient Boosting remains best in aggregate. These are
+descriptive validation findings, not causal conclusions, evidence of future
+performance, or a specialized routing strategy.
+
 ### 2026 Test-Set Policy
 
 > **2026 is held out for final model evaluation.** The original smoke-run
@@ -499,12 +605,12 @@ that a feature is valuable.
 > through Week 3, another availability snapshot rather than a modeling change.
 
 No 2026 rows were transformed or predicted during Linear Regression, Random
-Forest, sklearn Gradient Boosting, or XGBoost training/validation. No 2026 outcomes,
-predictions, residuals, or metrics were inspected. Feed growth did not affect
-the fixed 2021-2024 training or 2025 validation results. The 2026 holdout
-remains locked until final model selection and must not be used while selecting
-preprocessing, features, populations, hyperparameters, or models. Test
-structural and feature-availability diagnostics remain allowed.
+Forest, sklearn Gradient Boosting, XGBoost, or validation-comparison work. No
+2026 outcomes, predictions, residuals, or metrics were inspected. Feed growth
+did not affect the fixed 2021-2024 training or 2025 validation results. The
+2026 holdout remains locked until final model selection and must not be used
+while selecting preprocessing, features, populations, hyperparameters, or
+models. Test structural and feature-availability diagnostics remain allowed.
 
 ### Results Ledger
 
@@ -524,24 +630,29 @@ structural and feature-availability diagnostics remain allowed.
 4. [x] Fixed Gradient Boosting benchmark.
 5. [x] Fixed XGBoost benchmark.
 6. [x] Fixed initial general-purpose model benchmarks.
+7. [x] Consistent validation comparison and error analysis.
 
 ### Next QB Modeling Stages
 
-1. [ ] Consistent validation comparison and error analysis across completed models.
-2. [ ] Leakage-safe QB-population experiments.
-3. [ ] Defense-feature ablation.
+1. [ ] Likely-primary-QB population analysis.
+2. [ ] Defense-feature ablation.
+3. [ ] Defensive-strength analysis and representations.
 4. [ ] Opponent-adjusted QB form.
-5. [ ] Defensive-strength representations.
-6. [ ] Blitz/pressure/man/zone data audit.
-7. [ ] Offensive-style data audit.
-8. [ ] QB-versus-defense style experiments.
-9. [ ] Defense-versus-offense style experiments.
-10. [ ] Defensive/offensive clustering.
-11. [ ] Final validation-based model selection.
-12. [ ] One-time 2026 test evaluation.
-13. [ ] Model persistence and weekly inference.
-14. [ ] Streamlit and sportsbook comparison.
+5. [ ] Defensive/offensive style-data audit.
+6. [ ] QB-versus-defense style experiments.
+7. [ ] Defense-versus-offense style experiments.
+8. [ ] Defensive/offensive clustering.
+9. [ ] Style and interaction features.
+10. [ ] Final validation-based model selection.
+11. [ ] One-time 2026 holdout evaluation.
+12. [ ] Model persistence and weekly inference.
+13. [ ] Streamlit integration.
+14. [ ] Sportsbook comparison/backtesting.
 15. [ ] RB modeling.
+
+Any likely-primary-QB rule must use only information available before the
+target game. It must not select players using same-game attempts, starts,
+passing yards, or any other outcomes.
 
 Defensive tiers are not fixed in advance. Continuous values, thirds,
 quartiles, top/bottom groups, or data-derived clusters may be compared using
@@ -553,6 +664,10 @@ may be evaluated later for projection-versus-line backtesting.
 Offensive-style work may include measurable versions of West Coast or
 Shanahan-style tendencies, but no subjective or unsupported scheme labels have
 been implemented.
+
+No current result makes claims from blitz, pressure, man/zone, personnel,
+motion, or offensive-scheme data; their availability and historical reliability
+must be audited before they can support a future experiment.
 
 ## Testing
 
