@@ -79,6 +79,21 @@ from football.training.qb_passing_yards_model_comparison import (
     ValidationSlice,
     compare_qb_passing_yards_models,
 )
+from football.training.qb_likely_primary_population_analysis import (
+    LIKELY_PRIMARY,
+    NOT_LIKELY_PRIMARY,
+    UNKNOWN,
+    LikelyPrimaryModelDiagnostics,
+    LikelyPrimaryPopulationMetrics,
+    PopulationRowWinCount,
+    PopulationWeekCount,
+    PregameSignalInventory,
+    QBPrimaryFeasibilityReport,
+    QBPrimaryPopulationAnalysis,
+    TeamGameSelectionSummary,
+    analyze_qb_likely_primary_population,
+    audit_qb_primary_qb_feasibility,
+)
 
 __all__ = [
     "QBPassingYardsDatasetSplit",
@@ -144,4 +159,17 @@ __all__ = [
     "RowLevelWinCount",
     "ValidationSlice",
     "compare_qb_passing_yards_models",
+    "LIKELY_PRIMARY",
+    "NOT_LIKELY_PRIMARY",
+    "UNKNOWN",
+    "LikelyPrimaryModelDiagnostics",
+    "LikelyPrimaryPopulationMetrics",
+    "PopulationRowWinCount",
+    "PopulationWeekCount",
+    "PregameSignalInventory",
+    "QBPrimaryFeasibilityReport",
+    "QBPrimaryPopulationAnalysis",
+    "TeamGameSelectionSummary",
+    "analyze_qb_likely_primary_population",
+    "audit_qb_primary_qb_feasibility",
 ]
