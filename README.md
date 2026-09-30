@@ -119,6 +119,8 @@ same population, boundaries, and validation standard.
   Boosting, and XGBoost benchmarks.
 * A consistent, leakage-safe validation comparison and error-analysis report
   for all five completed models.
+* A dated-depth-chart feasibility audit and likely-primary-QB population
+  analysis.
 * A held-out, outcome-blind test set. Test outcomes are not used while models
   are developed.
 
@@ -594,6 +596,99 @@ game history slice. Gradient Boosting remains best in aggregate. These are
 descriptive validation findings, not causal conclusions, evidence of future
 performance, or a specialized routing strategy.
 
+### Likely-Primary-QB Population Analysis
+
+`football/training/qb_likely_primary_population_analysis.py` provides
+`audit_qb_primary_qb_feasibility()` and
+`analyze_qb_likely_primary_population(dataset_split, schedule_rows,
+depth_chart_snapshots)`. The feasibility audit found that dated nflverse
+depth-chart snapshots support a genuine pregame candidate selector for the
+covered 2025-2026 data. Legacy 2020-2024 weekly depth charts and weekly
+rosters lack a reliable snapshot timestamp, so they are excluded from
+selection. Weekly player statistics and completed-game primary-passer logic
+are also rejected because they reveal target-game participation or outcomes.
+This does not imply that every historical season supports the dated-depth-chart
+selector.
+
+For each scheduled team-game, the selector matches QB candidates from
+same-season depth-chart snapshots dated strictly before the scheduled game
+date; same-day snapshots are excluded. It selects the lowest numeric depth
+rank and breaks equal-rank ties deterministically by `player_id`, selecting at
+most one likely-primary candidate per team-game. Where no usable pregame
+evidence exists, the classification is `Unknown`. Target-game passing attempts,
+passing yards, starts, snaps, plays, participation, and outcomes are never
+used for selection.
+
+The candidate selector is deployable because its inputs are pregame dated
+snapshots. The scored likely-primary population is nevertheless a retrospective
+subset of observed QB passing rows: a selected candidate who did not appear in
+the target passing dataset has no passing-yards outcome in the existing scored
+dataset. Consequently, this analysis does not evaluate every selected candidate
+and must not be described as complete deployment performance. It also does not
+show that excluding difficult rows improves a predictive model.
+
+Models were trained only on the 2,615 2021-2024 training rows, and population
+scoring used only the 664-row 2025 validation partition. No 2026 test rows,
+predictions, outcomes, metrics, or structural counts were accessed or reported.
+Although dated depth-chart source support extends into 2026, no 2026 analysis
+result is presented here.
+
+| Coverage item | Value |
+| --- | ---: |
+| Scheduled team-games | 544 |
+| Team-games with zero selected candidates | 0 |
+| Team-games with exactly one selected candidate | 544 |
+| Team-games with multiple selected candidates | 0 |
+| Candidate coverage | 100% |
+| Observed likely-primary QB rows | 495 |
+| Observed not-likely-primary QB rows | 169 |
+| Unknown observed rows | 0 |
+
+The 544 scheduled team-games count each team side of a game separately. The
+495 observed likely-primary rows do not mean that only 495 candidates were
+selected: some selected candidates did not appear in the observed QB
+passing-yards dataset. The 169 observed not-likely-primary rows are other
+observed QB passing rows, not 169 team-games without a primary selection.
+
+Each cell in the following table is **MAE / RMSE / R² / mean signed error**;
+signed error remains `prediction - actual`.
+
+| Model | Full population | Likely primary | Not likely primary |
+| --- | --- | --- | --- |
+| Historical average | 73.76 / 96.60 / 0.1130 / +5.82 | 64.36 / 82.42 / -0.1891 / -5.70 | 101.31 / 129.49 / -0.6863 / +39.53 |
+| Linear Regression | 66.00 / 82.00 / 0.3609 / +5.48 | 59.88 / 75.50 / 0.0023 / -4.61 | 83.92 / 98.61 / 0.0222 / +35.01 |
+| Random Forest | 65.57 / 83.57 / 0.3361 / +3.86 | 60.37 / 76.03 / -0.0119 / -4.18 | 80.79 / 102.52 / -0.0569 / +27.39 |
+| sklearn Gradient Boosting | 64.27 / 81.66 / 0.3662 / +3.92 | 59.11 / 74.86 / 0.0190 / -4.31 | 79.39 / 98.92 / 0.0160 / +28.05 |
+| XGBoost | 64.62 / 82.08 / 0.3596 / +5.84 | 59.53 / 75.16 / 0.0113 / -2.03 | 79.54 / 99.63 / 0.0018 / +28.88 |
+
+sklearn Gradient Boosting has the lowest MAE in the full, observed
+likely-primary, and observed not-likely-primary populations: 59.11 yards for
+the likely-primary rows and 79.39 yards for the not-likely-primary rows. Its
+not-likely-primary signed bias is +28.05 yards, indicating average
+overprediction in that validation subgroup; its likely-primary signed bias is
+-4.31 yards, indicating slight average underprediction. All five models have
+substantially larger errors and positive signed bias on observed
+not-likely-primary rows. This is evidence that role and expected opportunity
+deserve additional study, not evidence that population filtering improves the
+underlying model, a causal conclusion, or final model selection. Near-zero or
+negative subgroup R² values likewise do not establish that predictions have no
+value.
+
+Row-level wins use the established `1e-12` absolute-error tie tolerance; every
+tied model receives a win. A win means only that a model was closest on that
+row and does not replace MAE, RMSE, R², bias, or distribution diagnostics.
+
+| Model | Likely-primary wins | Not-likely-primary wins |
+| --- | ---: | ---: |
+| Historical average | 122 | 60 |
+| Linear Regression | 98 | 22 |
+| Random Forest | 124 | 45 |
+| sklearn Gradient Boosting | 75 | 17 |
+| XGBoost | 76 | 25 |
+
+The historical baseline can accumulate many wins while performing worse overall
+because its losing errors are larger.
+
 ### 2026 Test-Set Policy
 
 > **2026 is held out for final model evaluation.** The original smoke-run
@@ -631,28 +726,25 @@ models. Test structural and feature-availability diagnostics remain allowed.
 5. [x] Fixed XGBoost benchmark.
 6. [x] Fixed initial general-purpose model benchmarks.
 7. [x] Consistent validation comparison and error analysis.
+8. [x] Dated-depth-chart feasibility audit and likely-primary-QB population
+   analysis.
 
 ### Next QB Modeling Stages
 
-1. [ ] Likely-primary-QB population analysis.
-2. [ ] Defense-feature ablation.
-3. [ ] Defensive-strength analysis and representations.
-4. [ ] Opponent-adjusted QB form.
-5. [ ] Defensive/offensive style-data audit.
-6. [ ] QB-versus-defense style experiments.
-7. [ ] Defense-versus-offense style experiments.
-8. [ ] Defensive/offensive clustering.
-9. [ ] Style and interaction features.
-10. [ ] Final validation-based model selection.
-11. [ ] One-time 2026 holdout evaluation.
-12. [ ] Model persistence and weekly inference.
-13. [ ] Streamlit integration.
-14. [ ] Sportsbook comparison/backtesting.
-15. [ ] RB modeling.
-
-Any likely-primary-QB rule must use only information available before the
-target game. It must not select players using same-game attempts, starts,
-passing yards, or any other outcomes.
+1. [ ] Feature ablation: compare QB-history-only, defense-only, and combined
+   feature groups using the same training and 2025 validation boundaries.
+2. [ ] Defensive-strength analysis and representations.
+3. [ ] Opponent-adjusted QB form.
+4. [ ] Defensive/offensive style-data feasibility audit, including blitz,
+   pressure, coverage, and offensive-style availability.
+5. [ ] QB-versus-defense and defense-versus-offense style experiments.
+6. [ ] Defensive/offensive clustering and interaction features.
+7. [ ] Final validation-based model selection.
+8. [ ] One-time 2026 holdout evaluation.
+9. [ ] Model persistence and weekly inference.
+10. [ ] Streamlit integration.
+11. [ ] Sportsbook comparison and historical backtesting.
+12. [ ] RB rushing-yards modeling.
 
 Defensive tiers are not fixed in advance. Continuous values, thirds,
 quartiles, top/bottom groups, or data-derived clusters may be compared using
