@@ -68,6 +68,17 @@ from football.training.qb_passing_yards_xgboost import (
     predict_qb_passing_yards_xgboost,
     train_and_validate_qb_passing_yards_xgboost,
 )
+from football.training.qb_passing_yards_model_comparison import (
+    ErrorDistributionDiagnostics,
+    ModelSliceMetrics,
+    ModelValidationDiagnostics,
+    PairwiseMAEDifference,
+    PredictionDisagreement,
+    QBPassingYardsModelComparison,
+    RowLevelWinCount,
+    ValidationSlice,
+    compare_qb_passing_yards_models,
+)
 
 __all__ = [
     "QBPassingYardsDatasetSplit",
@@ -124,4 +135,13 @@ __all__ = [
     "fit_qb_passing_yards_xgboost",
     "predict_qb_passing_yards_xgboost",
     "train_and_validate_qb_passing_yards_xgboost",
+    "ErrorDistributionDiagnostics",
+    "ModelSliceMetrics",
+    "ModelValidationDiagnostics",
+    "PairwiseMAEDifference",
+    "PredictionDisagreement",
+    "QBPassingYardsModelComparison",
+    "RowLevelWinCount",
+    "ValidationSlice",
+    "compare_qb_passing_yards_models",
 ]
