@@ -115,6 +115,7 @@ same population, boundaries, and validation standard.
 * A historical-average baseline with a training-only cold-start fallback.
 * A structured dataset-quality and baseline-validation audit.
 * A read-only real-data smoke run using public nflverse data.
+* Fixed, reproducible Linear Regression and Random Forest benchmarks.
 * A held-out, outcome-blind test set. Test outcomes are not used while models
   are developed.
 
@@ -285,6 +286,61 @@ yards allowed 231.33, and defensive matchup rank 17.0. No numerical-
 conditioning warnings occurred. Coefficients are available through the public
 model report for reproducibility; they are not feature importance.
 
+### Random Forest Validation
+
+The Random Forest benchmark uses `sklearn.ensemble.RandomForestRegressor` with
+one fixed, untuned configuration: `n_estimators=500`, `random_state=42`,
+`max_depth=None`, `min_samples_split=2`, `min_samples_leaf=1`,
+`max_features=1.0`, `bootstrap=True`, and `n_jobs=1`. These parameters were
+predetermined, not selected using 2025 validation results.
+
+It uses the exact same 14 public predictive features as Linear Regression:
+training-only median imputation for permitted missing numeric history,
+validated/pass-through missing-history flags, no scaling, and no row dropping.
+It trained on 2021-2024 and remained fixed through 2025 validation while the
+point-in-time weekly features updated. Identifiers, target values, sportsbook
+lines, home/away, and team labels are not model inputs.
+
+| Group | Rows | MAE | RMSE | R² |
+| --- | ---: | ---: | ---: | ---: |
+| Overall | 664 | 65.57 | 83.57 | 0.3361 |
+| Cold start | 51 | 66.67 | 82.68 | -0.3950 |
+| Non-cold-start | 613 | 65.48 | 83.65 | 0.2552 |
+
+Relative to the historical-average baseline, Random Forest improved MAE by
+8.19 yards, RMSE by 13.03 yards, and R² by 0.2231, and won on MAE. Relative to
+Linear Regression, it improved MAE by 0.43 yards but changed RMSE by -1.57
+yards and R² by -0.0248: Linear Regression remains better on RMSE and R².
+These comparisons use `comparison - Random Forest` for MAE/RMSE and
+`Random Forest - comparison` for R², so positive values favor Random Forest.
+
+Random Forest's overall MAE advantage over Linear Regression is narrow. It
+substantially improved cold-start MAE (66.67 versus 76.30), whereas Linear
+Regression was slightly better for non-cold-start MAE (65.14 versus 65.48).
+Linear Regression's lower RMSE suggests better control of large misses.
+Random Forest is the MAE leader; Linear Regression remains the RMSE and R²
+leader. No final model has been selected. These results apply to all eligible
+QB rows, including backups and low-volume passers, and do not establish
+profitability or production readiness.
+
+| Feature | Importance |
+| --- | ---: |
+| qb_last3_passing_attempts_avg | 0.165662 |
+| qb_season_passing_yards_avg | 0.157385 |
+| qb_last3_passing_yards_avg | 0.127452 |
+| defense_season_passing_attempts_allowed_avg | 0.087336 |
+| defense_last3_passing_yards_allowed_avg | 0.081147 |
+| defense_season_passing_yards_allowed_avg | 0.077051 |
+| qb_season_history_games | 0.067009 |
+| qb_season_passing_attempts_avg | 0.065038 |
+| defense_season_history_games | 0.049062 |
+| defense_matchup_rank | 0.048607 |
+
+These are impurity-based Random Forest importances. They are not causal
+effects and do not measure a feature's standalone value. Recent passing
+attempts were highest-ranked in this fitted model. Defense-feature contribution
+must be tested later through controlled ablation.
+
 ### 2026 Test-Set Policy
 
 > **2026 is held out for final model evaluation.** The original smoke-run
@@ -292,13 +348,14 @@ model report for reproducibility; they are not feature importance.
 > later Linear Regression validation run, the live public feed had updated to
 > 76 rows across 43 QBs and 32 games in the same weeks. These are
 > time-dependent data-availability snapshots, not dataset implementation
-> changes.
+> changes. During the Random Forest run, it had reached 112 structural rows
+> through Week 3, another availability snapshot rather than a modeling change.
 
-No 2026 rows were transformed or predicted during Linear Regression
-training/validation. No 2026 targets, predictions, residuals, metrics, or
-outcome summaries were inspected. All model results reported here are from
-2025 validation. The 2026 holdout remains locked for final evaluation and must
-not be used while selecting preprocessing, features, populations,
+No 2026 rows were transformed or predicted during Linear Regression or Random
+Forest training/validation. No 2026 targets, predictions, residuals, or
+metrics were inspected. All model results reported here are from 2025
+validation. The 2026 holdout remains locked until final model selection and
+must not be used while selecting preprocessing, features, populations,
 hyperparameters, or models. Test structural and feature-availability
 diagnostics remain allowed.
 
@@ -307,27 +364,34 @@ diagnostics remain allowed.
 | Model | Validation population | MAE | RMSE | R² | Status |
 | --- | --- | ---: | ---: | ---: | --- |
 | Historical average | All 2025 eligible QB rows | 73.76 | 96.60 | 0.1130 | Official baseline |
-| Linear Regression | All 2025 eligible QB rows | 66.00 | 82.00 | 0.3609 | Current leader |
+| Linear Regression | All 2025 eligible QB rows | 66.00 | 82.00 | 0.3609 | RMSE and R² leader |
+| Random Forest | All 2025 eligible QB rows | 65.57 | 83.57 | 0.3361 | MAE leader |
 
-### Planned QB Modeling Stages
+### Completed QB Modeling Stages
 
 1. [x] Training-only preprocessing for missing history.
 2. [x] Initial Linear Regression using existing leakage-safe features.
-3. [ ] Random Forest (next model).
-4. [ ] Gradient Boosting/XGBoost after Random Forest.
-5. [ ] Consistent validation comparison and error analysis.
-6. [ ] Leakage-safe QB-population experiments.
-7. [ ] Defense-feature ablation and defensive-strength representation
-   experiments.
-8. [ ] Opponent-adjusted QB form.
-9. [ ] Defensive-style data investigation using blitz, pressure, man coverage,
-   and zone coverage where reliable historical data exists.
-10. [ ] Defensive-style similarity/clustering experiments.
-11. [ ] Final model selection.
-12. [ ] One-time held-out 2026 test evaluation.
-13. [ ] Model persistence, weekly inference, Streamlit projections, and
-    sportsbook-line comparison.
-14. [ ] RB rushing-yards modeling after the QB pipeline is established.
+3. [x] Fixed Random Forest benchmark.
+
+### Next QB Modeling Stages
+
+1. [ ] Fixed Gradient Boosting benchmark.
+2. [ ] Fixed XGBoost benchmark.
+3. [ ] Consistent model comparison and error analysis.
+4. [ ] Leakage-safe QB-population experiments.
+5. [ ] Defense-feature ablation.
+6. [ ] Defensive-strength representation experiments.
+7. [ ] Data-availability audit for blitz, pressure, man/zone, personnel,
+    motion, and offensive-scheme variables.
+8. [ ] QB performance against defensive styles.
+9. [ ] Defense performance against offensive styles.
+10. [ ] Defensive-style and offensive-style clustering.
+11. [ ] Style-interaction features.
+12. [ ] Final model selection.
+13. [ ] One-time held-out 2026 evaluation.
+14. [ ] Model persistence and weekly inference.
+15. [ ] Streamlit projections and sportsbook comparison.
+16. [ ] RB rushing-yards modeling.
 
 Defensive tiers are not fixed in advance. Continuous values, thirds,
 quartiles, top/bottom groups, or data-derived clusters may be compared using
@@ -335,6 +399,10 @@ chronological validation.
 
 Paid historical sportsbook lines are not currently part of model results. They
 may be evaluated later for projection-versus-line backtesting.
+
+Offensive-style work may include measurable versions of West Coast or
+Shanahan-style tendencies, but no subjective or unsupported scheme labels have
+been implemented.
 
 ## Testing
 
