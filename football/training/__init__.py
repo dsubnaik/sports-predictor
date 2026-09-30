@@ -56,6 +56,18 @@ from football.training.qb_passing_yards_gradient_boosting import (
     predict_qb_passing_yards_gradient_boosting,
     train_and_validate_qb_passing_yards_gradient_boosting,
 )
+from football.training.qb_passing_yards_xgboost import (
+    QBPassingYardsXGBoostEvaluation,
+    QBPassingYardsXGBoostModel,
+    QBPassingYardsXGBoostValidation,
+    XGBoostComparison,
+    XGBoostFeatureImportance,
+    XGBoostParameters,
+    evaluate_qb_passing_yards_xgboost,
+    fit_qb_passing_yards_xgboost,
+    predict_qb_passing_yards_xgboost,
+    train_and_validate_qb_passing_yards_xgboost,
+)
 
 __all__ = [
     "QBPassingYardsDatasetSplit",
@@ -102,4 +114,14 @@ __all__ = [
     "fit_qb_passing_yards_gradient_boosting",
     "predict_qb_passing_yards_gradient_boosting",
     "train_and_validate_qb_passing_yards_gradient_boosting",
+    "QBPassingYardsXGBoostEvaluation",
+    "QBPassingYardsXGBoostModel",
+    "QBPassingYardsXGBoostValidation",
+    "XGBoostComparison",
+    "XGBoostFeatureImportance",
+    "XGBoostParameters",
+    "evaluate_qb_passing_yards_xgboost",
+    "fit_qb_passing_yards_xgboost",
+    "predict_qb_passing_yards_xgboost",
+    "train_and_validate_qb_passing_yards_xgboost",
 ]
