@@ -44,6 +44,18 @@ from football.training.qb_passing_yards_random_forest import (
     predict_qb_passing_yards_random_forest,
     train_and_validate_qb_passing_yards_random_forest,
 )
+from football.training.qb_passing_yards_gradient_boosting import (
+    GradientBoostingComparison,
+    GradientBoostingFeatureImportance,
+    GradientBoostingParameters,
+    QBPassingYardsGradientBoostingEvaluation,
+    QBPassingYardsGradientBoostingModel,
+    QBPassingYardsGradientBoostingValidation,
+    evaluate_qb_passing_yards_gradient_boosting,
+    fit_qb_passing_yards_gradient_boosting,
+    predict_qb_passing_yards_gradient_boosting,
+    train_and_validate_qb_passing_yards_gradient_boosting,
+)
 
 __all__ = [
     "QBPassingYardsDatasetSplit",
@@ -80,4 +92,14 @@ __all__ = [
     "fit_qb_passing_yards_random_forest",
     "predict_qb_passing_yards_random_forest",
     "train_and_validate_qb_passing_yards_random_forest",
+    "GradientBoostingComparison",
+    "GradientBoostingFeatureImportance",
+    "GradientBoostingParameters",
+    "QBPassingYardsGradientBoostingEvaluation",
+    "QBPassingYardsGradientBoostingModel",
+    "QBPassingYardsGradientBoostingValidation",
+    "evaluate_qb_passing_yards_gradient_boosting",
+    "fit_qb_passing_yards_gradient_boosting",
+    "predict_qb_passing_yards_gradient_boosting",
+    "train_and_validate_qb_passing_yards_gradient_boosting",
 ]
