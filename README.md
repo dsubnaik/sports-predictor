@@ -341,6 +341,79 @@ effects and do not measure a feature's standalone value. Recent passing
 attempts were highest-ranked in this fitted model. Defense-feature contribution
 must be tested later through controlled ablation.
 
+### Gradient Boosting Validation
+
+The fixed Gradient Boosting benchmark uses
+`sklearn.ensemble.GradientBoostingRegressor` with one predetermined,
+untuned configuration:
+
+* `loss="squared_error"`
+* `learning_rate=0.05`
+* `n_estimators=200`
+* `subsample=1.0`
+* `criterion="friedman_mse"`
+* `min_samples_split=2`
+* `min_samples_leaf=1`
+* `max_depth=3`
+* `max_features=None`
+* `random_state=42`
+
+No tuning or parameter sweep occurred, and these parameters were not selected
+using 2025 results. The model trained on 2021-2024 only, was evaluated on 2025
+only, and remained fixed throughout 2025 while point-in-time features updated
+by game week. It uses the exact same 14 public predictive features as the
+completed models: training-only median imputation for permitted missing
+numeric history, validated/pass-through missing-history flags, no scaling, and
+no row dropping. Identifiers, metadata, target values, home/away, and
+sportsbook lines are not inputs. The fitted pipeline keeps preprocessing and
+the estimator together.
+
+| Group | Rows | MAE | RMSE | R² |
+| --- | ---: | ---: | ---: | ---: |
+| Overall | 664 | 64.27 | 81.66 | 0.3662 |
+| Cold start | 51 | 66.04 | 79.02 | -0.2743 |
+| Non-cold-start | 613 | 64.12 | 81.88 | 0.2863 |
+
+Positive improvement favors Gradient Boosting: comparison MAE minus Gradient
+Boosting MAE, comparison RMSE minus Gradient Boosting RMSE, and Gradient
+Boosting R² minus comparison R².
+
+| Comparison | MAE improvement | RMSE improvement | R² improvement |
+| --- | ---: | ---: | ---: |
+| Historical average | +9.4944 yards | +14.9417 yards | +0.2532 |
+| Linear Regression | +1.7308 yards | +0.3389 yards | +0.0053 |
+| Random Forest | +1.2999 yards | +1.9123 yards | +0.0300 |
+
+Gradient Boosting is the current validation leader on MAE, RMSE, and R² for
+the established eligible-QB population. Its MAE is about 64 yards per
+QB-game, and it improves cold-start and non-cold-start MAE relative to the
+earlier models. Its advantage over Linear Regression is real but modest, it
+has not been tuned, XGBoost remains untested, and no final model has been
+selected. The population still includes backups and low-volume passers; these
+results do not establish betting profitability or production readiness.
+
+The installed scikit-learn version emitted a non-blocking deprecation warning
+for the explicitly specified `criterion` parameter. No numerical or modeling
+warning occurred.
+
+| Feature | Importance |
+| --- | ---: |
+| qb_last3_passing_yards_avg | 0.211636 |
+| qb_last3_passing_attempts_avg | 0.202901 |
+| qb_season_passing_yards_avg | 0.190369 |
+| qb_missing_history | 0.136354 |
+| qb_season_history_games | 0.074918 |
+| defense_season_passing_attempts_allowed_avg | 0.032941 |
+| qb_season_passing_attempts_avg | 0.031918 |
+| defense_season_passing_yards_allowed_avg | 0.030403 |
+| qb_last3_history_games | 0.029363 |
+| defense_last3_passing_yards_allowed_avg | 0.024767 |
+
+These are impurity-based feature importances, not causal effects or evidence
+of a feature's standalone value. Controlled ablation is still required. Recent
+QB form and workload dominate this fitted model's ranking; defensive features
+remain present but collectively rank below the leading QB features.
+
 ### 2026 Test-Set Policy
 
 > **2026 is held out for final model evaluation.** The original smoke-run
@@ -348,50 +421,51 @@ must be tested later through controlled ablation.
 > later Linear Regression validation run, the live public feed had updated to
 > 76 rows across 43 QBs and 32 games in the same weeks. These are
 > time-dependent data-availability snapshots, not dataset implementation
-> changes. During the Random Forest run, it had reached 112 structural rows
+> changes. During the Gradient Boosting run, it had reached 112 structural rows
 > through Week 3, another availability snapshot rather than a modeling change.
 
-No 2026 rows were transformed or predicted during Linear Regression or Random
-Forest training/validation. No 2026 targets, predictions, residuals, or
-metrics were inspected. All model results reported here are from 2025
-validation. The 2026 holdout remains locked until final model selection and
-must not be used while selecting preprocessing, features, populations,
-hyperparameters, or models. Test structural and feature-availability
-diagnostics remain allowed.
+No 2026 rows were transformed or predicted during Linear Regression, Random
+Forest, or Gradient Boosting training/validation. No 2026 outcomes,
+predictions, residuals, or metrics were inspected. Feed growth did not affect
+the fixed 2021-2024 training or 2025 validation results. The 2026 holdout
+remains locked until final model selection and must not be used while selecting
+preprocessing, features, populations, hyperparameters, or models. Test
+structural and feature-availability diagnostics remain allowed.
 
 ### Results Ledger
 
 | Model | Validation population | MAE | RMSE | R² | Status |
 | --- | --- | ---: | ---: | ---: | --- |
 | Historical average | All 2025 eligible QB rows | 73.76 | 96.60 | 0.1130 | Official baseline |
-| Linear Regression | All 2025 eligible QB rows | 66.00 | 82.00 | 0.3609 | RMSE and R² leader |
-| Random Forest | All 2025 eligible QB rows | 65.57 | 83.57 | 0.3361 | MAE leader |
+| Linear Regression | All 2025 eligible QB rows | 66.00 | 82.00 | 0.3609 | Previous benchmark |
+| Random Forest | All 2025 eligible QB rows | 65.57 | 83.57 | 0.3361 | Previous MAE leader |
+| Gradient Boosting | All 2025 eligible QB rows | 64.27 | 81.66 | 0.3662 | Current validation leader |
 
 ### Completed QB Modeling Stages
 
 1. [x] Training-only preprocessing for missing history.
 2. [x] Initial Linear Regression using existing leakage-safe features.
 3. [x] Fixed Random Forest benchmark.
+4. [x] Fixed Gradient Boosting benchmark.
 
 ### Next QB Modeling Stages
 
-1. [ ] Fixed Gradient Boosting benchmark.
-2. [ ] Fixed XGBoost benchmark.
-3. [ ] Consistent model comparison and error analysis.
+1. [ ] Fixed XGBoost benchmark.
+2. [ ] Consistent initial-model comparison.
+3. [ ] Error analysis.
 4. [ ] Leakage-safe QB-population experiments.
 5. [ ] Defense-feature ablation.
-6. [ ] Defensive-strength representation experiments.
-7. [ ] Data-availability audit for blitz, pressure, man/zone, personnel,
-    motion, and offensive-scheme variables.
-8. [ ] QB performance against defensive styles.
-9. [ ] Defense performance against offensive styles.
-10. [ ] Defensive-style and offensive-style clustering.
-11. [ ] Style-interaction features.
+6. [ ] Defensive-strength representations.
+7. [ ] Blitz/pressure/man/zone data audit.
+8. [ ] Offensive-style data audit.
+9. [ ] QB-versus-defense style experiments.
+10. [ ] Defense-versus-offense style experiments.
+11. [ ] Defensive/offensive clustering.
 12. [ ] Final model selection.
-13. [ ] One-time held-out 2026 evaluation.
+13. [ ] One-time 2026 test evaluation.
 14. [ ] Model persistence and weekly inference.
-15. [ ] Streamlit projections and sportsbook comparison.
-16. [ ] RB rushing-yards modeling.
+15. [ ] Streamlit and sportsbook comparison.
+16. [ ] RB modeling.
 
 Defensive tiers are not fixed in advance. Continuous values, thirds,
 quartiles, top/bottom groups, or data-derived clusters may be compared using
