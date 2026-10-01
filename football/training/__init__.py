@@ -108,6 +108,20 @@ from football.training.qb_passing_yards_feature_ablation import (
     QBPassingYardsFeatureAblation,
     analyze_qb_passing_yards_feature_ablation,
 )
+from football.training.qb_passing_yards_defensive_representation import (
+    CONTINUOUS_DEFENSE,
+    CONTINUOUS_PLUS_RANK,
+    CONTINUOUS_PLUS_TIER,
+    QB_ONLY_REFERENCE,
+    RANK_ONLY,
+    TIER_ONLY,
+    DefensiveRepresentationBootstrap,
+    DefensiveRepresentationComparison,
+    DefensiveRepresentationVariant,
+    EstimatorDefensiveRepresentation,
+    QBPassingYardsDefensiveRepresentationAnalysis,
+    analyze_qb_passing_yards_defensive_representation,
+)
 
 __all__ = [
     "QBPassingYardsDatasetSplit",
@@ -198,4 +212,16 @@ __all__ = [
     "EstimatorFeatureAblation",
     "QBPassingYardsFeatureAblation",
     "analyze_qb_passing_yards_feature_ablation",
+    "QB_ONLY_REFERENCE",
+    "CONTINUOUS_DEFENSE",
+    "RANK_ONLY",
+    "TIER_ONLY",
+    "CONTINUOUS_PLUS_RANK",
+    "CONTINUOUS_PLUS_TIER",
+    "DefensiveRepresentationVariant",
+    "DefensiveRepresentationComparison",
+    "DefensiveRepresentationBootstrap",
+    "EstimatorDefensiveRepresentation",
+    "QBPassingYardsDefensiveRepresentationAnalysis",
+    "analyze_qb_passing_yards_defensive_representation",
 ]
