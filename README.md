@@ -689,6 +689,99 @@ row and does not replace MAE, RMSE, R², bias, or distribution diagnostics.
 The historical baseline can accumulate many wins while performing worse overall
 because its losing errors are larger.
 
+### QB-History and Defense Feature Ablation
+
+`football/training/qb_passing_yards_feature_ablation.py` provides a controlled,
+leakage-safe test of whether the existing point-in-time opponent-defense
+features add value beyond QB history. It holds training rows, validation rows,
+estimator parameters, preprocessing behavior, random seeds, and evaluation
+methods constant; only the selected feature group changes.
+
+The three fixed feature groups are:
+
+* **QB_HISTORY_ONLY** (7): `qb_season_passing_yards_avg`,
+  `qb_last3_passing_yards_avg`, `qb_season_passing_attempts_avg`,
+  `qb_last3_passing_attempts_avg`, `qb_season_history_games`,
+  `qb_last3_history_games`, and `qb_missing_history`.
+* **DEFENSE_ONLY** (7): `defense_season_passing_yards_allowed_avg`,
+  `defense_last3_passing_yards_allowed_avg`,
+  `defense_season_passing_attempts_allowed_avg`,
+  `defense_season_history_games`, `defense_last3_history_games`,
+  `defense_missing_history`, and `defense_matchup_rank`.
+* **QB_AND_DEFENSE**: the dataset builder's complete canonical 14-feature
+  public contract.
+
+No identifiers, names, team/opponent labels, home/away, targets, sportsbook
+lines, depth-chart fields, target-game statistics, or outcome-derived values
+are model inputs. Every variant uses training-only median imputation; only the
+missing-history flags belonging to its selected group are included and those
+booleans pass through unchanged. No rows are dropped, and tree models are not
+scaled. The all-14-feature variants reproduce the completed public model
+predictions and metrics within a `1e-10` tolerance.
+
+The ablation used source-history seasons 2020-2026 and modeling targets
+2021-2026: 2,615 training rows from 2021-2024 and 664 validation rows from
+2025. The test boundary is 2026. No test-partition property or 2026 row was
+read, transformed, predicted, scored, summarized, counted, or inspected by the
+component.
+
+Signed error is `prediction - actual`, so positive values indicate average
+overprediction.
+
+| Model | Feature group | MAE | RMSE | R² | Mean signed error |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Linear Regression | QB history | 66.6256 | 82.6567 | 0.3506 | +4.7759 |
+| Linear Regression | Defense only | 81.5523 | 102.8953 | -0.0064 | +10.0747 |
+| Linear Regression | QB + defense | 65.9986 | 81.9990 | 0.3609 | +5.4785 |
+| Random Forest | QB history | 68.4121 | 86.3374 | 0.2915 | +4.8715 |
+| Random Forest | Defense only | 85.1389 | 107.5643 | -0.0998 | +19.1236 |
+| Random Forest | QB + defense | 65.5677 | 83.5724 | 0.3361 | +3.8584 |
+| sklearn Gradient Boosting | QB history | 65.8575 | 82.9298 | 0.3463 | +5.8013 |
+| sklearn Gradient Boosting | Defense only | 82.6331 | 104.0549 | -0.0292 | +11.1341 |
+| sklearn Gradient Boosting | QB + defense | 64.2678 | 81.6601 | 0.3662 | +3.9248 |
+| XGBoost | QB history | 65.6915 | 83.0583 | 0.3443 | +5.0999 |
+| XGBoost | Defense only | 82.1412 | 104.2369 | -0.0328 | +12.9219 |
+| XGBoost | QB + defense | 64.6208 | 82.0804 | 0.3596 | +5.8399 |
+
+For the adding-defense comparison, MAE improvement is QB-history-only MAE
+minus QB-and-defense MAE; RMSE improvement uses the same direction; R²
+improvement is QB-and-defense R² minus QB-history-only R². Positive values
+therefore favor adding defense.
+
+| Model | MAE improvement | RMSE improvement | R² improvement | 95% game-cluster MAE interval |
+| --- | ---: | ---: | ---: | --- |
+| Linear Regression | +0.6270 | +0.6577 | +0.0103 | -0.1196 to +1.3484 |
+| Random Forest | +2.8444 | +2.7650 | +0.0447 | +0.9402 to +4.7569 |
+| sklearn Gradient Boosting | +1.5897 | +1.2697 | +0.0199 | +0.4833 to +2.6793 |
+| XGBoost | +1.0707 | +0.9778 | +0.0153 | -0.2701 to +2.3815 |
+
+Predictions are paired on the same validation rows. The uncertainty diagnostic
+resamples `game_id` clusters, so all QB rows in a game stay together: 2,000
+replicates, random seed 42, a 95% percentile interval, and NumPy's `linear`
+percentile method. It estimates uncertainty in the paired validation MAE
+improvement; it does not establish causality, formal universal statistical
+significance, or guaranteed future performance.
+
+Defense-only models are materially worse than QB-history-only or combined
+models for every estimator, so QB history contains most of the predictive
+information among the current features. Adding defense improves point-estimate
+MAE, RMSE, and R² for all four learned estimators. The Random Forest and
+Gradient Boosting intervals are entirely above zero, providing validation
+evidence that defense features reduce MAE for those estimators. The Linear
+Regression and XGBoost intervals include zero, making their added-defense MAE
+benefit uncertain on this validation sample; this does not mean the defense
+features are useless. sklearn Gradient Boosting with all 14 features remains
+the aggregate validation leader. This is not final model selection.
+
+Cold start remains exactly a missing `qb_season_passing_yards_avg`.
+
+| Model | Cold-start MAE | Non-cold-start MAE |
+| --- | ---: | ---: |
+| Linear Regression | 76.3004 | 65.1415 |
+| Random Forest | 66.6728 | 65.4758 |
+| sklearn Gradient Boosting | 66.0370 | 64.1206 |
+| XGBoost | 67.8579 | 64.3515 |
+
 ### 2026 Test-Set Policy
 
 > **2026 is held out for final model evaluation.** The original smoke-run
@@ -728,15 +821,19 @@ models. Test structural and feature-availability diagnostics remain allowed.
 7. [x] Consistent validation comparison and error analysis.
 8. [x] Dated-depth-chart feasibility audit and likely-primary-QB population
    analysis.
+9. [x] Controlled QB-history/defense feature ablation with a paired
+   game-cluster bootstrap diagnostic.
 
 ### Next QB Modeling Stages
 
-1. [ ] Feature ablation: compare QB-history-only, defense-only, and combined
-   feature groups using the same training and 2025 validation boundaries.
-2. [ ] Defensive-strength analysis and representations.
-3. [ ] Opponent-adjusted QB form.
-4. [ ] Defensive/offensive style-data feasibility audit, including blitz,
+1. [ ] Defensive-strength representation analysis: determine whether continuous
+   defense metrics, `defense_matchup_rank`, fixed rank tiers, or combinations
+   provide the most useful validation signal.
+2. [ ] Opponent-adjusted QB form.
+3. [ ] Defensive/offensive style-data feasibility audit, including blitz,
    pressure, coverage, and offensive-style availability.
+4. [ ] Blitz, pressure, coverage, personnel, motion, and offensive-style
+   analysis where reliable historical data exists.
 5. [ ] QB-versus-defense and defense-versus-offense style experiments.
 6. [ ] Defensive/offensive clustering and interaction features.
 7. [ ] Final validation-based model selection.
