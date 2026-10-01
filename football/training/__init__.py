@@ -122,6 +122,13 @@ from football.training.qb_passing_yards_defensive_representation import (
     QBPassingYardsDefensiveRepresentationAnalysis,
     analyze_qb_passing_yards_defensive_representation,
 )
+from football.training.qb_passing_yards_opponent_adjusted_form import (
+    ADJUSTED_FORM_FEATURE_COLUMNS,
+    attach_qb_opponent_adjusted_form_features,
+    build_qb_opponent_adjusted_form_features,
+    analyze_qb_passing_yards_opponent_adjusted_form,
+    QBPassingYardsOpponentAdjustedFormAnalysis,
+)
 
 __all__ = [
     "QBPassingYardsDatasetSplit",
@@ -224,4 +231,9 @@ __all__ = [
     "EstimatorDefensiveRepresentation",
     "QBPassingYardsDefensiveRepresentationAnalysis",
     "analyze_qb_passing_yards_defensive_representation",
+    "ADJUSTED_FORM_FEATURE_COLUMNS",
+    "build_qb_opponent_adjusted_form_features",
+    "attach_qb_opponent_adjusted_form_features",
+    "analyze_qb_passing_yards_opponent_adjusted_form",
+    "QBPassingYardsOpponentAdjustedFormAnalysis",
 ]
