@@ -121,6 +121,7 @@ same population, boundaries, and validation standard.
   for all five completed models.
 * A dated-depth-chart feasibility audit and likely-primary-QB population
   analysis.
+* A controlled defensive-strength representation analysis.
 * A held-out, outcome-blind test set. Test outcomes are not used while models
   are developed.
 
@@ -782,6 +783,57 @@ Cold start remains exactly a missing `qb_season_passing_yards_avg`.
 | sklearn Gradient Boosting | 66.0370 | 64.1206 |
 | XGBoost | 67.8579 | 64.3515 |
 
+### Defensive-Strength Representation Analysis
+
+`football/training/qb_passing_yards_defensive_representation.py` compares six
+fixed representations while holding the training rows, validation rows,
+estimator parameters, preprocessing, evaluation, and random seeds constant:
+
+* QB history only.
+* Continuous defense.
+* Rank only.
+* Tier only.
+* Continuous defense plus numeric rank.
+* Continuous defense plus fixed rank tiers.
+
+Rank 1 means the highest pregame historical mean QB passing yards allowed.
+The fixed tiers are 1-10, 11-22, 23-32, and missing. Every defensive value is
+point-in-time and is calculated before the target game. Training used
+2021-2024 only; evaluation used the same 664 2025 validation rows only. No
+2026 test rows or test-partition properties were accessed.
+
+| Model | QB only | Continuous | Rank only | Tier only | Continuous + rank | Continuous + tier |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Linear Regression | 66.63 | 66.20 | 65.99 | 65.98 | 66.00 | 66.01 |
+| Random Forest | 68.41 | 65.63 | 66.39 | 66.84 | 65.57 | 65.72 |
+| Gradient Boosting | 65.86 | 64.29 | 64.37 | 64.32 | 64.27 | 64.32 |
+| XGBoost | 65.69 | 64.27 | 64.35 | 64.97 | 64.62 | 64.54 |
+
+Positive values below mean that the represented defensive information reduced
+MAE. Continuous defensive performance improved MAE over QB history only by
++0.42 yards for Linear Regression, +2.78 for Random Forest, +1.57 for
+Gradient Boosting, and +1.42 for XGBoost.
+
+| Model | Numeric rank beyond continuous defense | Fixed tiers beyond continuous defense |
+| --- | --- | --- |
+| Linear Regression | +0.20; 95% interval -0.08 to +0.51 | +0.19; 95% interval -0.20 to +0.62 |
+| Random Forest | +0.07; 95% interval -0.35 to +0.50 | -0.08; 95% interval -0.34 to +0.18 |
+| Gradient Boosting | +0.02; 95% interval -0.38 to +0.42 | -0.04; 95% interval -0.34 to +0.24 |
+| XGBoost | -0.35; 95% interval -0.98 to +0.30 | -0.27; 95% interval -0.81 to +0.28 |
+
+The paired diagnostic resamples `game_id` clusters (2,000 replicates, seed
+42) and uses a 95% NumPy `linear` percentile interval. Every interval for rank
+or tiers beyond continuous defense includes zero. Thus, neither numeric rank
+nor these fixed tiers demonstrate a stable additional MAE benefit beyond the
+continuous defensive statistics on this validation sample, although the
+continuous statistics themselves remain useful.
+
+sklearn Gradient Boosting with the official continuous-plus-rank contract
+remains the aggregate leader (MAE 64.27, RMSE 81.66, R² 0.3662). The extra rank
+feature should be reconsidered during final feature/model selection, without
+changing the official model contract now. These are descriptive validation
+findings, not causal proof or final model selection.
+
 ### 2026 Test-Set Policy
 
 > **2026 is held out for final model evaluation.** The original smoke-run
@@ -823,20 +875,23 @@ models. Test structural and feature-availability diagnostics remain allowed.
    analysis.
 9. [x] Controlled QB-history/defense feature ablation with a paired
    game-cluster bootstrap diagnostic.
+10. [x] Defensive-strength representation analysis.
 
 ### Next QB Modeling Stages
 
-1. [ ] Defensive-strength representation analysis: determine whether continuous
-   defense metrics, `defense_matchup_rank`, fixed rank tiers, or combinations
-   provide the most useful validation signal.
-2. [ ] Opponent-adjusted QB form.
-3. [ ] Defensive/offensive style-data feasibility audit, including blitz,
+1. [ ] Opponent-adjusted QB form.
+2. [ ] Defensive/offensive style-data feasibility audit, including blitz,
    pressure, coverage, and offensive-style availability.
-4. [ ] Blitz, pressure, coverage, personnel, motion, and offensive-style
+3. [ ] Blitz, pressure, coverage, personnel, motion, and offensive-style
    analysis where reliable historical data exists.
-5. [ ] QB-versus-defense and defense-versus-offense style experiments.
-6. [ ] Defensive/offensive clustering and interaction features.
-7. [ ] Final validation-based model selection.
+4. [ ] QB-versus-defense and defense-versus-offense style experiments.
+5. [ ] Defensive/offensive clustering and interaction features.
+6. [ ] Final validation-based model selection.
+7. [ ] Final documentation consolidation: shorten `README.md`, move detailed
+   QB research to `docs/nfl-qb-passing-yards.md`, and retain a concise README
+   leaderboard and link. Detailed documentation will be consolidated during
+   final model selection rather than requiring a separate README update after
+   every remaining experiment.
 8. [ ] One-time 2026 holdout evaluation.
 9. [ ] Model persistence and weekly inference.
 10. [ ] Streamlit integration.
