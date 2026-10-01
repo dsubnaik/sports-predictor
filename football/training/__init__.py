@@ -129,6 +129,10 @@ from football.training.qb_passing_yards_opponent_adjusted_form import (
     analyze_qb_passing_yards_opponent_adjusted_form,
     QBPassingYardsOpponentAdjustedFormAnalysis,
 )
+from football.training.qb_passing_yards_final_selection import (
+    QBPassingYardsFinalSelection, QBPassingYardsFinalSelectionReport,
+    select_qb_passing_yards_final_model,
+)
 
 __all__ = [
     "QBPassingYardsDatasetSplit",
@@ -236,4 +240,7 @@ __all__ = [
     "attach_qb_opponent_adjusted_form_features",
     "analyze_qb_passing_yards_opponent_adjusted_form",
     "QBPassingYardsOpponentAdjustedFormAnalysis",
+    "QBPassingYardsFinalSelection",
+    "QBPassingYardsFinalSelectionReport",
+    "select_qb_passing_yards_final_model",
 ]

@@ -852,6 +852,29 @@ did not affect the fixed 2021-2024 training or 2025 validation results. The
 while selecting preprocessing, features, populations, hyperparameters, or
 models. Test structural and feature-availability diagnostics remain allowed.
 
+### Final Validation-Based Selection
+
+The frozen production candidate is `sklearn.ensemble.GradientBoostingRegressor`
+with the completed canonical 14-feature contract, training-only median
+imputation, validated missing-history flags, no scaling, and no row dropping.
+It was selected solely from 2025 validation: MAE 64.2678, RMSE 81.6601, and
+R² 0.3662. The 2026 holdout remains unopened and unscored. This is a model
+selection decision, not deployment, individual-error guarantee, or sportsbook
+validation.
+
+Opponent-adjusted form was excluded: its enhanced Gradient Boosting MAE was
+65.11 versus 64.27 for the official contract (improvement -0.84; 95%
+game-cluster interval -1.59 to -0.14). Fixed rank tiers were also excluded.
+The dated depth-chart selector remains a separate pregame candidate-selection
+mechanism, not a predictive input. No sportsbook, depth-chart, or unverified
+style fields are model inputs.
+
+The public-data style audit found that sack/QB-hit rates and selected
+formation/personnel tendencies may support future explicit proxies. Reliable
+full-history blitz, total-pressure, hurry, man/zone, coverage-shell,
+motion/play-action, and named-scheme features are not yet established, so
+style work will not delay initial deployment.
+
 ### Results Ledger
 
 | Model | Validation population | MAE | RMSE | R² | Status |
@@ -860,7 +883,7 @@ models. Test structural and feature-availability diagnostics remain allowed.
 | Linear Regression | All 2025 eligible QB rows | 66.00 | 82.00 | 0.3609 | Previous benchmark |
 | Random Forest | All 2025 eligible QB rows | 65.57 | 83.57 | 0.3361 | Previous MAE leader |
 | XGBoost | All 2025 eligible QB rows | 64.6208 | 82.0804 | 0.3596 | Initial benchmark complete |
-| sklearn Gradient Boosting | All 2025 eligible QB rows | 64.2678 | 81.6601 | 0.3662 | Current validation leader |
+| sklearn Gradient Boosting | All 2025 eligible QB rows | 64.2678 | 81.6601 | 0.3662 | Frozen production candidate |
 
 ### Completed QB Modeling Stages
 
@@ -876,27 +899,29 @@ models. Test structural and feature-availability diagnostics remain allowed.
 9. [x] Controlled QB-history/defense feature ablation with a paired
    game-cluster bootstrap diagnostic.
 10. [x] Defensive-strength representation analysis.
+11. [x] Opponent-adjusted QB form experiment; excluded from the selected
+    feature contract by 2025 validation.
+12. [x] Final validation-based model selection: frozen Gradient Boosting
+    production candidate with the official 14-feature contract.
 
 ### Next QB Modeling Stages
 
-1. [ ] Opponent-adjusted QB form.
-2. [ ] Defensive/offensive style-data feasibility audit, including blitz,
+1. [ ] Defensive/offensive style-data feasibility audit, including blitz,
    pressure, coverage, and offensive-style availability.
-3. [ ] Blitz, pressure, coverage, personnel, motion, and offensive-style
+2. [ ] Blitz, pressure, coverage, personnel, motion, and offensive-style
    analysis where reliable historical data exists.
-4. [ ] QB-versus-defense and defense-versus-offense style experiments.
-5. [ ] Defensive/offensive clustering and interaction features.
-6. [ ] Final validation-based model selection.
-7. [ ] Final documentation consolidation: shorten `README.md`, move detailed
+3. [ ] QB-versus-defense and defense-versus-offense style experiments.
+4. [ ] Defensive/offensive clustering and interaction features.
+5. [ ] Final documentation consolidation: shorten `README.md`, move detailed
    QB research to `docs/nfl-qb-passing-yards.md`, and retain a concise README
-   leaderboard and link. Detailed documentation will be consolidated during
+   leaderboard and link. Detailed documentation will be consolidated following
    final model selection rather than requiring a separate README update after
    every remaining experiment.
-8. [ ] One-time 2026 holdout evaluation.
-9. [ ] Model persistence and weekly inference.
-10. [ ] Streamlit integration.
-11. [ ] Sportsbook comparison and historical backtesting.
-12. [ ] RB rushing-yards modeling.
+6. [ ] One-time 2026 holdout evaluation.
+7. [ ] Model persistence and weekly inference.
+8. [ ] Streamlit integration.
+9. [ ] Sportsbook comparison and historical backtesting.
+10. [ ] RB rushing-yards modeling.
 
 Defensive tiers are not fixed in advance. Continuous values, thirds,
 quartiles, top/bottom groups, or data-derived clusters may be compared using
