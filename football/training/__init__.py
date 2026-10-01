@@ -94,6 +94,20 @@ from football.training.qb_likely_primary_population_analysis import (
     analyze_qb_likely_primary_population,
     audit_qb_primary_qb_feasibility,
 )
+from football.training.qb_passing_yards_feature_ablation import (
+    DEFENSE_ONLY,
+    FEATURE_GROUP_NAMES,
+    QB_AND_DEFENSE,
+    QB_HISTORY_ONLY,
+    DEFAULT_BOOTSTRAP_REPLICATES,
+    EstimatorFeatureAblation,
+    FeatureAblationPopulationMetrics,
+    FeatureAblationVariant,
+    FeatureGroupComparison,
+    PairedDefenseMAEBootstrap,
+    QBPassingYardsFeatureAblation,
+    analyze_qb_passing_yards_feature_ablation,
+)
 
 __all__ = [
     "QBPassingYardsDatasetSplit",
@@ -172,4 +186,16 @@ __all__ = [
     "TeamGameSelectionSummary",
     "analyze_qb_likely_primary_population",
     "audit_qb_primary_qb_feasibility",
+    "QB_HISTORY_ONLY",
+    "DEFENSE_ONLY",
+    "QB_AND_DEFENSE",
+    "FEATURE_GROUP_NAMES",
+    "DEFAULT_BOOTSTRAP_REPLICATES",
+    "FeatureAblationPopulationMetrics",
+    "FeatureAblationVariant",
+    "FeatureGroupComparison",
+    "PairedDefenseMAEBootstrap",
+    "EstimatorFeatureAblation",
+    "QBPassingYardsFeatureAblation",
+    "analyze_qb_passing_yards_feature_ablation",
 ]
