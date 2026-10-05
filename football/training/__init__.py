@@ -133,6 +133,17 @@ from football.training.qb_passing_yards_final_selection import (
     QBPassingYardsFinalSelection, QBPassingYardsFinalSelectionReport,
     select_qb_passing_yards_final_model,
 )
+from football.training.qb_passing_yards_production_model import (
+    QBPassingYardsLoadedArtifact,
+    QBPassingYardsProductionMetadata,
+    QBPassingYardsProductionModel,
+    QBPassingYardsProductionPredictions,
+    QBPassingYardsSavedArtifact,
+    load_qb_passing_yards_production_model,
+    predict_qb_passing_yards_production_model,
+    save_qb_passing_yards_production_model,
+    train_qb_passing_yards_production_model,
+)
 
 __all__ = [
     "QBPassingYardsDatasetSplit",
@@ -243,4 +254,13 @@ __all__ = [
     "QBPassingYardsFinalSelection",
     "QBPassingYardsFinalSelectionReport",
     "select_qb_passing_yards_final_model",
+    "QBPassingYardsLoadedArtifact",
+    "QBPassingYardsProductionMetadata",
+    "QBPassingYardsProductionModel",
+    "QBPassingYardsProductionPredictions",
+    "QBPassingYardsSavedArtifact",
+    "load_qb_passing_yards_production_model",
+    "predict_qb_passing_yards_production_model",
+    "save_qb_passing_yards_production_model",
+    "train_qb_passing_yards_production_model",
 ]
