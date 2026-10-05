@@ -326,3 +326,16 @@ fields are not estimator inputs.
    fixed.
 6. Later compare projections with sportsbook lines, backtest, and extend the
    pipeline to RB rushing yards.
+
+## Production Refit and Persistence
+
+`train_qb_passing_yards_production_model(dataset_split)` refits the frozen
+candidate on the completed 2021–2025 training and validation rows only. It does
+not read `split.test`; 2026 remains unscored. The explicit save operation writes
+a `.joblib` model and adjacent `.joblib.metadata.json` manifest containing the
+canonical feature contract, fixed parameters, training boundary, versions,
+SHA-256 checksum, and byte size. No real artifact is committed.
+
+Artifacts are trusted local files only. Manifest checksum validation detects a
+change relative to the manifest, but joblib/pickle deserialization is not safe
+for untrusted files.
