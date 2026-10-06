@@ -53,6 +53,9 @@ class QBPassingYardsWeeklyFeatureRow:
 class QBPassingYardsWeeklyFeatureRows:
     rows: tuple[QBPassingYardsWeeklyFeatureRow, ...]
     skips: tuple[QBPassingYardsWeeklySkip, ...]
+    target_season: int
+    target_week: int
+    as_of_utc: str
     scheduled_games_considered: int
     eligible_games: int
     team_games_considered: int
@@ -112,7 +115,10 @@ def build_qb_passing_yards_weekly_feature_rows(
     scheduled_games = int(target["game_id"].nunique())
     eligible, skips = _eligible_schedule(target, as_of)
     if eligible.empty:
-        return QBPassingYardsWeeklyFeatureRows((), tuple(skips), scheduled_games, 0, 0, 0, 0, 0, 0)
+        return QBPassingYardsWeeklyFeatureRows(
+            (), tuple(skips), target_season, target_week, as_of.isoformat(),
+            scheduled_games, 0, 0, 0, 0, 0, 0,
+        )
 
     selected, unknown = _select_candidates(eligible, depth_chart_snapshots, as_of)
     history = _history_with_context(historical_quarterback_games, schedule)
@@ -135,7 +141,11 @@ def build_qb_passing_yards_weekly_feature_rows(
     skips.extend(QBPassingYardsWeeklySkip(row.game_id, row.team, "no_usable_pregame_depth_chart_candidate") for row in unknown.itertuples(index=False))
     cold = sum(bool(row.feature_values[6]) for row in rows)
     defense_missing = sum(bool(row.feature_values[12]) for row in rows)
-    return QBPassingYardsWeeklyFeatureRows(tuple(rows), tuple(sorted(skips, key=lambda item: (str(item.game_id), str(item.team), item.reason))), scheduled_games, int(eligible["game_id"].nunique()), len(eligible), len(rows), len(unknown), cold, defense_missing)
+    return QBPassingYardsWeeklyFeatureRows(
+        tuple(rows), tuple(sorted(skips, key=lambda item: (str(item.game_id), str(item.team), item.reason))),
+        target_season, target_week, as_of.isoformat(), scheduled_games,
+        int(eligible["game_id"].nunique()), len(eligible), len(rows), len(unknown), cold, defense_missing,
+    )
 
 
 def generate_qb_passing_yards_weekly_projections(

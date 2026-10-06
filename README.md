@@ -49,13 +49,14 @@ season/recent passing-volume form, QB history availability, opponent-defense
 passing yards and attempts allowed, defense history availability, and defensive
 matchup rank.
 
-The 2026 holdout remains unopened and unscored. Detailed methodology,
+The 2026 season remains unscored and excluded from model fitting and selection;
+strictly prior completed 2026 weeks may supply lagged live-inference features.
+Detailed methodology,
 experiment history, selection rationale, and limitations are in
 [the NFL QB passing-yards technical record](docs/nfl-qb-passing-yards.md).
 
-Next: train the frozen specification on completed 2021–2025 data, persist the
-model and metadata, build weekly inference, integrate projections into
-Streamlit, and only later evaluate the locked 2026 holdout once.
+Next: integrate validated unscored weekly projection snapshots into Streamlit,
+then only later evaluate the locked 2026 holdout once.
 
 ## Data Pipeline
 
@@ -116,8 +117,9 @@ sports-predictor/
 ### NFL QB Passing Yards
 
 - [x] Freeze the validation-selected model specification
-- [ ] Train on completed 2021–2025 data and persist model metadata
-- [ ] Build weekly inference and Streamlit projections
+- [x] Train on completed 2021–2025 data and persist model metadata
+- [x] Build weekly inference and validated local projection snapshots
+- [ ] Integrate projections into Streamlit
 - [ ] Perform one-time locked-2026 holdout evaluation
 - [ ] Compare projections with sportsbook lines and backtest later
 - [ ] Extend to RB rushing-yards modeling

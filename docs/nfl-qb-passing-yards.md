@@ -8,9 +8,11 @@ candidate is `sklearn.ensemble.GradientBoostingRegressor` with the official
 14-feature contract. It is a candidate specification, not a saved or deployed
 model.
 
-Selection used only the 2025 validation partition. The 2026 holdout remains
-unopened and unscored. MAE is an average validation error, not an individual
-prediction guarantee; sportsbook profitability has not been tested.
+Selection used only the 2025 validation partition. The 2026 season remains
+unscored and excluded from model fitting and selection; strictly earlier
+completed 2026 weeks may supply lagged live-inference features. MAE is an
+average validation error, not an individual prediction guarantee; sportsbook
+profitability has not been tested.
 
 Completed components include the point-in-time dataset builder, deterministic
 splitter, historical-average baseline, dataset/baseline audit, four learned
@@ -310,22 +312,21 @@ fields are not estimator inputs.
 - Validation includes backups and low-volume passers.
 - Cold starts and observed non-primary appearances remain less reliable.
 - Likely-primary candidate selection is separate from prediction.
-- No artifact, weekly inference pipeline, deployment, or sportsbook backtest
-  exists yet.
+- The frozen model can be persisted locally and generate unscored pregame
+  weekly projections, but it is not deployed and has no Streamlit display yet.
+- No sportsbook backtest exists.
 - No causal conclusion follows from feature importances, slices, ablations, or
   bootstrap intervals.
 - No 2026 test performance is known.
 
 ## 18. Deferred Work and Production Roadmap
 
-1. Train the frozen specification on completed 2021–2025 data.
-2. Persist the model and metadata, then build weekly inference.
-3. Integrate projections into Streamlit.
-4. Explore defensible public style/proxy work if historical coverage becomes
+1. Integrate validated unscored projection snapshots into Streamlit.
+2. Explore defensible public style/proxy work if historical coverage becomes
    sufficient.
-5. Perform the one-time 2026 holdout evaluation after candidate decisions are
+3. Perform the one-time 2026 holdout evaluation after candidate decisions are
    fixed.
-6. Later compare projections with sportsbook lines, backtest, and extend the
+4. Later compare projections with sportsbook lines, backtest, and extend the
    pipeline to RB rushing yards.
 
 ## Production Refit and Persistence
@@ -348,5 +349,25 @@ rows only for scheduled regular-season team-games that are strictly after an
 explicit UTC as-of timestamp. Dated pregame depth charts select at most one QB
 candidate per team-game; depth-chart status is metadata, never a model input.
 The frozen artifact then projects only the canonical 14 point-in-time features.
-Projection persistence and Streamlit display remain future work. 2026 remains
-unscored and excluded from fitting and model selection.
+2026 remains unscored and excluded from fitting and model selection.
+
+## Weekly Projection Snapshots
+
+`save_qb_passing_yards_weekly_projection_snapshot(...)` writes the immutable
+output of weekly inference as deterministic, atomically replaced JSON. Store
+generated snapshots under
+`football/data/processed/qb_passing_yards_projection_snapshots/`; that
+generated-data location is ignored by Git. The snapshot contains only safe
+projection display identifiers, kickoff/as-of timestamps, predicted passing
+yards, aggregate diagnostics, skip reasons, the canonical feature-contract
+fingerprint, and the trusted artifact identity/training boundary. It excludes
+raw features, targets, outcomes, residuals, models, pipelines, sportsbook
+lines, and recommendations.
+
+`load_qb_passing_yards_weekly_projection_snapshot(...)` validates the JSON
+schema, counts, feature contract, timestamps, and optional expected artifact
+SHA-256 without loading a model or performing inference. A checksum can detect
+an identity mismatch against the manifest value, but it does not make an
+untrusted joblib/pickle file safe to deserialize. Snapshots are unscored
+projections, not demonstrated sportsbook edges. Streamlit display remains the
+next step.
