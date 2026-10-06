@@ -55,8 +55,8 @@ Detailed methodology,
 experiment history, selection rationale, and limitations are in
 [the NFL QB passing-yards technical record](docs/nfl-qb-passing-yards.md).
 
-Next: integrate validated unscored weekly projection snapshots into Streamlit,
-then only later evaluate the locked 2026 holdout once.
+Next: later evaluate the locked 2026 holdout once the remaining deployment
+decisions are fixed; sportsbook comparison and backtesting remain separate.
 
 ## Data Pipeline
 
@@ -119,7 +119,7 @@ sports-predictor/
 - [x] Freeze the validation-selected model specification
 - [x] Train on completed 2021–2025 data and persist model metadata
 - [x] Build weekly inference and validated local projection snapshots
-- [ ] Integrate projections into Streamlit
+- [x] Display validated local QB projections beside matching passing-yard lines
 - [ ] Perform one-time locked-2026 holdout evaluation
 - [ ] Compare projections with sportsbook lines and backtest later
 - [ ] Extend to RB rushing-yards modeling

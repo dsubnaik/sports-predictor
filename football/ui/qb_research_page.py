@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from pathlib import Path
 import sqlite3
 from typing import Any, Callable
 from urllib.error import URLError
@@ -15,6 +16,7 @@ except ImportError:  # pragma: no cover - requests is an app dependency.
     RequestException = OSError
 
 from football.pipeline import WeeklyQBResearchResult, build_weekly_qb_research
+from football.config import QB_PASSING_YARDS_PROJECTION_SNAPSHOT_PATH
 from football.decision_database import open_local_decision_database
 from football.decisions import (
     DecisionStoreError,
@@ -43,6 +45,18 @@ from football.ui.qb_research_view import (
     prepare_summary_display,
     QBDecisionEntryValidationError,
 )
+from football.ui.qb_projection_view import (
+    QBProjectionPresentation,
+    build_qb_projection_presentation,
+    load_qb_projection_snapshot_for_ui,
+)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_qb_projection_snapshot(path_text: str, modified_ns: int) -> object:
+    """Cache only a validated JSON snapshot; never a model artifact."""
+    del modified_ns
+    return load_qb_projection_snapshot_for_ui(path_text)
 
 
 def load_qb_research(
@@ -70,6 +84,8 @@ def render_football_qb_research_page(
     database_opener: Callable[[], sqlite3.Connection] = open_local_decision_database,
     clock: Callable[[], object] | None = None,
     id_factory: Callable[[], object] | None = None,
+    projection_snapshot_path: Path = QB_PASSING_YARDS_PROJECTION_SNAPSHOT_PATH,
+    projection_snapshot_loader: Callable[[Path], object] | None = None,
 ) -> None:
     """Render QB research and deliberately record one displayed odds snapshot."""
 
@@ -243,6 +259,14 @@ def render_football_qb_research_page(
             "sportsbook market-update times are shown in the table."
         )
 
+    _render_qb_projection_snapshot(
+        ui,
+        selected_matchup,
+        selected_props,
+        projection_snapshot_path=projection_snapshot_path,
+        projection_snapshot_loader=projection_snapshot_loader,
+    )
+
     qb_log = filter_qb_game_log(result.qb_game_logs, selected_matchup)
     defense_log = filter_defense_game_log(result.defense_game_logs, selected_matchup)
 
@@ -277,6 +301,62 @@ def render_football_qb_research_page(
         )
 
     ui.caption("Research data: nflverse via nflreadpy. Sportsbook data: The Odds API.")
+
+
+def _render_qb_projection_snapshot(
+    ui: Any,
+    selected_matchup: Any,
+    selected_props: Any,
+    *,
+    projection_snapshot_path: Path,
+    projection_snapshot_loader: Callable[[Path], object] | None,
+) -> None:
+    """Render an optional, local JSON snapshot without altering research state."""
+    checkbox = getattr(ui, "checkbox", None)
+    if not callable(checkbox):
+        return
+    enabled = checkbox(
+        "Load saved QB model projection snapshot",
+        value=False,
+        key="football_qb_projection_snapshot_enabled",
+        help="Loads a local validated JSON snapshot only; it does not run model inference.",
+    )
+    if not enabled:
+        return
+    if projection_snapshot_loader is None:
+        try:
+            modified_ns = projection_snapshot_path.stat().st_mtime_ns
+        except OSError:
+            modified_ns = -1
+        loaded = _cached_qb_projection_snapshot(str(projection_snapshot_path), modified_ns)
+    else:
+        loaded = projection_snapshot_loader(projection_snapshot_path)
+    if not hasattr(loaded, "status"):
+        ui.caption("Saved model projection snapshot is invalid or incompatible.")
+        return
+    presentation = build_qb_projection_presentation(loaded, selected_matchup, selected_props)
+    _render_projection_presentation(ui, presentation)
+
+
+def _render_projection_presentation(ui: Any, presentation: QBProjectionPresentation) -> None:
+    ui.subheader("Model Projection")
+    if presentation.status != "matched":
+        ui.caption(presentation.message)
+        return
+    ui.markdown(f"**Predicted passing yards:** {presentation.displayed_projection}")
+    ui.caption(
+        f"Snapshot target: {presentation.season} Week {presentation.week}. "
+        f"As of: {presentation.as_of_display}."
+    )
+    if presentation.line_comparisons:
+        for comparison in presentation.line_comparisons:
+            label = comparison.sportsbook or "Sportsbook"
+            ui.markdown(
+                f"**{label} passing-yards line:** {comparison.line:.1f}  \\n+{comparison.direction_text}"
+            )
+    else:
+        ui.caption("No matching passing-yards line is available.")
+    ui.caption("Unscored model estimate; not a betting recommendation.")
 
 
 def _render_qb_decision_entry(
