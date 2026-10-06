@@ -27,6 +27,15 @@ from football.pipeline.qb_passing_yards_weekly_inference import (
     build_qb_passing_yards_weekly_feature_rows,
     generate_qb_passing_yards_weekly_projections,
 )
+from football.pipeline.qb_passing_yards_weekly_projection_snapshots import (
+    QBPassingYardsWeeklyProjectionSnapshot,
+    QBPassingYardsWeeklyProjectionSnapshotArtifact,
+    QBPassingYardsWeeklyProjectionSnapshotMetadata,
+    QBPassingYardsWeeklyProjectionSnapshotProjection,
+    QBPassingYardsWeeklyProjectionSnapshotSkip,
+    load_qb_passing_yards_weekly_projection_snapshot,
+    save_qb_passing_yards_weekly_projection_snapshot,
+)
 
 __all__ = [
     "WeeklyQBResearchResult",
@@ -46,4 +55,11 @@ __all__ = [
     "QBPassingYardsWeeklyProjectionReport",
     "build_qb_passing_yards_weekly_feature_rows",
     "generate_qb_passing_yards_weekly_projections",
+    "QBPassingYardsWeeklyProjectionSnapshotArtifact",
+    "QBPassingYardsWeeklyProjectionSnapshotSkip",
+    "QBPassingYardsWeeklyProjectionSnapshotProjection",
+    "QBPassingYardsWeeklyProjectionSnapshotMetadata",
+    "QBPassingYardsWeeklyProjectionSnapshot",
+    "save_qb_passing_yards_weekly_projection_snapshot",
+    "load_qb_passing_yards_weekly_projection_snapshot",
 ]
