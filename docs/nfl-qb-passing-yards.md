@@ -66,10 +66,11 @@ cross-partition overlap, and correct chronological ordering.
 
 All historical features contain only information available before the target
 game. Models and preprocessors fit only on training rows; all selection and
-comparison work uses only the 2025 validation rows. The 2026 partition is not
-transformed, predicted, scored, summarized, or used for feature, population,
-or model decisions. Historical structural availability snapshots are not test
-outcome evaluation and are not repeated here.
+comparison work uses only the 2025 validation rows. The 2026 partition remains
+unscored and excluded from model selection and fitting. For live weekly
+inference only, completed games from strictly earlier 2026 weeks may supply
+lagged point-in-time features; target-week outcomes are never used, and no
+2026 metric, residual, or outcome evaluation is produced.
 
 ## 6. Official 14-Feature Contract
 
@@ -339,3 +340,13 @@ SHA-256 checksum, and byte size. No real artifact is committed.
 Artifacts are trusted local files only. Manifest checksum validation detects a
 change relative to the manifest, but joblib/pickle deserialization is not safe
 for untrusted files.
+
+## Weekly Inference
+
+`build_qb_passing_yards_weekly_feature_rows(...)` creates candidate feature
+rows only for scheduled regular-season team-games that are strictly after an
+explicit UTC as-of timestamp. Dated pregame depth charts select at most one QB
+candidate per team-game; depth-chart status is metadata, never a model input.
+The frozen artifact then projects only the canonical 14 point-in-time features.
+Projection persistence and Streamlit display remain future work. 2026 remains
+unscored and excluded from fitting and model selection.

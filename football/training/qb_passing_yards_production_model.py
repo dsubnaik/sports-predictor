@@ -258,6 +258,11 @@ def _valid_period(season: object, week: object) -> bool:
 def _validate_production_model(value: QBPassingYardsProductionModel) -> None:
     if not isinstance(value, QBPassingYardsProductionModel):
         raise TypeError("production_model must be a QBPassingYardsProductionModel")
+    if (
+        value.metadata.schema_version != ARTIFACT_SCHEMA_VERSION
+        or value.metadata.model_format_version != ARTIFACT_SCHEMA_VERSION
+    ):
+        raise ValueError("Production model schema version is unsupported")
     if value.metadata.feature_columns != tuple(FEATURE_COLUMNS) or value.model.feature_columns != tuple(FEATURE_COLUMNS):
         raise ValueError("Production model feature contract does not match the canonical contract")
     if value.metadata.estimator_parameters != GradientBoostingParameters() or value.model.parameters != GradientBoostingParameters():

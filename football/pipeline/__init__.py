@@ -18,6 +18,15 @@ from football.pipeline.build_selected_game_player_prop_odds import (
     SelectedGamePlayerPropOddsResult,
     build_selected_game_player_prop_odds,
 )
+from football.pipeline.qb_passing_yards_weekly_inference import (
+    QBPassingYardsWeeklyFeatureRow,
+    QBPassingYardsWeeklyFeatureRows,
+    QBPassingYardsWeeklyProjection,
+    QBPassingYardsWeeklyProjectionReport,
+    QBPassingYardsWeeklySkip,
+    build_qb_passing_yards_weekly_feature_rows,
+    generate_qb_passing_yards_weekly_projections,
+)
 
 __all__ = [
     "WeeklyQBResearchResult",
@@ -30,4 +39,11 @@ __all__ = [
     "ImmutableOddsTable",
     "SelectedGamePlayerPropOddsResult",
     "build_selected_game_player_prop_odds",
+    "QBPassingYardsWeeklySkip",
+    "QBPassingYardsWeeklyFeatureRow",
+    "QBPassingYardsWeeklyFeatureRows",
+    "QBPassingYardsWeeklyProjection",
+    "QBPassingYardsWeeklyProjectionReport",
+    "build_qb_passing_yards_weekly_feature_rows",
+    "generate_qb_passing_yards_weekly_projections",
 ]
