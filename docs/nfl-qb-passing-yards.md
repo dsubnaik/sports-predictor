@@ -313,7 +313,8 @@ fields are not estimator inputs.
 - Cold starts and observed non-primary appearances remain less reliable.
 - Likely-primary candidate selection is separate from prediction.
 - The frozen model can be persisted locally and generate unscored pregame
-  weekly projections, but it is not deployed and has no Streamlit display yet.
+  weekly projections. The optional Streamlit panel consumes a saved snapshot;
+  it does not train or run inference.
 - No sportsbook backtest exists.
 - No causal conclusion follows from feature importances, slices, ablations, or
   bootstrap intervals.
@@ -321,7 +322,7 @@ fields are not estimator inputs.
 
 ## 18. Deferred Work and Production Roadmap
 
-1. Integrate validated unscored projection snapshots into Streamlit.
+1. Run the explicit weekly snapshot command before opening Streamlit.
 2. Explore defensible public style/proxy work if historical coverage becomes
    sufficient.
 3. Perform the one-time 2026 holdout evaluation after candidate decisions are
@@ -384,3 +385,61 @@ ambiguous snapshots remain nonfatal.
 For matched passing-yards lines, the UI displays projection minus line in yards
 with neutral above/below wording. This is an unscored model estimate, not a
 calibrated cover probability, sportsbook edge, or betting recommendation.
+
+## Operating the Weekly Snapshot Command
+
+The Streamlit application reads a saved JSON snapshot; it never prepares an
+artifact, loads joblib, or runs live inference. Activate the Windows virtual
+environment first:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+```
+
+Prepare the trusted local artifact deliberately, once per intended refit. This
+uses source history through 2025 and targets from 2021--2025 only; it does not
+fit on 2026 data. The joblib and its manifest are generated and ignored by Git.
+
+```powershell
+python -m football.pipeline.generate_qb_passing_yards_weekly_snapshot --prepare-artifact
+```
+
+If replacing an existing local artifact is intentional, make that explicit:
+
+```powershell
+python -m football.pipeline.generate_qb_passing_yards_weekly_snapshot --prepare-artifact --overwrite-artifact
+```
+
+Create a dry run for a chosen regular-season week before writing the configured
+snapshot. The as-of value must include a timezone offset or `Z`.
+
+```powershell
+python -m football.pipeline.generate_qb_passing_yards_weekly_snapshot --season 2026 --week 5 --as-of 2026-10-06T14:00:00Z --dry-run
+```
+
+Write or intentionally replace
+`football/data/processed/qb_passing_yards_projection_snapshots/current.json`:
+
+```powershell
+python -m football.pipeline.generate_qb_passing_yards_weekly_snapshot --season 2026 --week 5 --as-of 2026-10-06T14:00:00Z --overwrite-snapshot
+```
+
+Then start Streamlit and enable **Load saved QB model projection snapshot** in
+QB Research:
+
+```powershell
+streamlit run app.py
+```
+
+The command validates the trusted artifact manifest, canonical 14-feature
+contract, and frozen parameters before inference. Joblib files remain trusted
+local files only: a checksum detects a mismatch against the manifest but does
+not make an untrusted pickle/joblib file safe. It loads completed prior-week
+2026 results only as lagged history; target-week and later outcomes are
+excluded. Snapshots are unscored estimates, not demonstrated sportsbook edges.
+
+If the artifact is missing, run the explicit preparation command. If the
+snapshot is absent, stale for the selected season/week, or invalid, QB Research
+continues without a projection. Zero projections means no eligible future games
+or no usable dated pregame depth-chart candidates; inspect the command's
+aggregate skip diagnostics rather than treating it as a performance result.

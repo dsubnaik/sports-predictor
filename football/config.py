@@ -15,3 +15,6 @@ PROCESSED_DATA_DIR = DATA_DIR / "processed"
 QB_PASSING_YARDS_PROJECTION_SNAPSHOT_PATH = (
     PROCESSED_DATA_DIR / "qb_passing_yards_projection_snapshots" / "current.json"
 )
+QB_PASSING_YARDS_PRODUCTION_ARTIFACT_PATH = (
+    FOOTBALL_DIR / "models" / "qb_passing_yards.joblib"
+)
