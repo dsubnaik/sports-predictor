@@ -369,5 +369,18 @@ schema, counts, feature contract, timestamps, and optional expected artifact
 SHA-256 without loading a model or performing inference. A checksum can detect
 an identity mismatch against the manifest value, but it does not make an
 untrusted joblib/pickle file safe to deserialize. Snapshots are unscored
-projections, not demonstrated sportsbook edges. Streamlit display remains the
-next step.
+projections, not demonstrated sportsbook edges.
+
+## Streamlit Snapshot Display
+
+QB Research can deliberately load the configured local snapshot at
+`football/data/processed/qb_passing_yards_projection_snapshots/current.json`.
+The UI uses the validated snapshot loader only; it never loads a joblib model,
+trains, or runs inference. A projection must agree with the selected season,
+week, game, team/opponent, and QB ID; a guarded existing name/suffix fallback
+is used only when the selected QB lacks an ID. Missing, stale, invalid, or
+ambiguous snapshots remain nonfatal.
+
+For matched passing-yards lines, the UI displays projection minus line in yards
+with neutral above/below wording. This is an unscored model estimate, not a
+calibrated cover probability, sportsbook edge, or betting recommendation.

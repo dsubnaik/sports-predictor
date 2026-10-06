@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 import football.ui.qb_research_page as qb_page
+from football.ui.qb_projection_view import QBProjectionSnapshotLoadResult
 from football.decision_database import open_local_decision_database
 from football.decisions import get_decision, list_decisions
 from football.pipeline import WeeklyQBResearchResult
@@ -142,6 +143,33 @@ def test_qb_selector_rerun_never_opens_database_or_reruns_report_loader():
 
     assert state["football_qb_research_result"] is report
     assert state["football_rb_research_result"] == "rb-state"
+
+
+def test_optional_projection_snapshot_load_is_deliberate_and_never_creates_a_decision(tmp_path):
+    class SnapshotStreamlit(DecisionEntryStreamlit):
+        def checkbox(self, label, **kwargs):
+            assert "projection snapshot" in label
+            return True
+
+    report = _report()
+    state = _state(report)
+    calls = []
+
+    def snapshot_loader(path):
+        calls.append(path)
+        return QBProjectionSnapshotLoadResult("snapshot_unavailable", None)
+
+    ui = SnapshotStreamlit(state)
+    qb_page.render_football_qb_research_page(
+        streamlit_module=ui,
+        report_loader=lambda **_kwargs: pytest.fail("QB pipeline reran"),
+        database_opener=lambda: pytest.fail("snapshot rendering opened SQLite"),
+        projection_snapshot_path=tmp_path / "current.json",
+        projection_snapshot_loader=snapshot_loader,
+    )
+
+    assert calls == [tmp_path / "current.json"]
+    assert any("projection snapshot is unavailable" in text for kind, text in ui.messages if kind == "caption")
 
 
 @pytest.mark.parametrize(
