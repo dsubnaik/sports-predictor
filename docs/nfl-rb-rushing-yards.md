@@ -29,12 +29,13 @@ The splitter itself is generic and parameterized; those years are the QB workflo
 
 ### RB-specific building blocks
 
-The RB backend already provides the following public contracts, but no RB training-dataset builder or RB chronological splitter yet:
+The RB backend already provides the following public contracts. It now has an RB training-dataset builder but no RB chronological splitter:
 
 - `football.data.build_running_back_dataset.build_running_back_dataset` creates normalized regular-season RB player-game rows (`OUTPUT_COLUMNS`) from nflverse weekly player statistics.
 - `football.features.running_back_usage.annotate_running_back_usage` preserves every normalized RB row and adds retrospective team totals, shares, leaders, low-volume, and shared-backfield flags.
 - `football.features.rb_form_metrics.build_rb_form_metrics` produces prior-game player form summaries. `football.features.defense_rb_game_logs.build_defense_rb_game_logs` aggregates completed opponent RB production, and `football.features.rb_defense_matchup_metrics.build_rb_defense_matchup_metrics` produces strictly prior defense summaries and a historical matchup rank.
 - `football.data.normalize_depth_charts.normalize_nflverse_depth_charts` maps dated 2025+ source snapshots to `CANONICAL_DEPTH_CHART_COLUMNS`: `team`, `player_id`, `player_name`, `position`, `snapshot_timestamp`, `depth_position`, and `depth_rank`. `football.features.expected_running_backs.resolve_expected_running_backs` retains every exact-`RB` entry from the latest eligible snapshot for each requested team, or emits an unresolved diagnostic row. It does not select a lead back and does not use usage.
+- `football.training.build_rb_rushing_yards_dataset.build_rb_rushing_yards_training_dataset` builds outcome-observed raw training rows. Its 22 canonical fields are RB season/last-three rushing yards, attempts, opportunities, carry shares, opportunity shares, sample counts, and missing-history flag; plus matching defense yards/attempts allowed, weighted yards per carry, sample counts, and missing-history flag. `target_rushing_yards`, identities, and prior-team change metadata remain outside `FEATURE_COLUMNS`.
 
 The weekly research pipeline (`football.pipeline.build_weekly_rb_research.build_weekly_rb_research`) deliberately preserves all expected backfield participants and makes no prediction. Its `as_of_date` is a slate-wide dated depth-chart cutoff, rather than a game-specific kickoff cutoff. The report/UI layer is not a population filter: `football.ui.rb_research_view.build_participant_options` hides unresolved identities from the selector, while backend report rows retain unresolved rows and all resolved expected RBs. UI visibility must never define training membership or pregame eligibility.
 
@@ -101,4 +102,4 @@ Use the same train/validation/test chronology and test-blind lifecycle as QB onc
 
 These evaluations could support claims about error on represented, outcome-observed RB rows and, for the dated-snapshot subset, on the stated pregame candidate definition. They cannot establish performance for all true actives, all rostered players, or unobserved player-games.
 
-The smallest next implementation task after policy review is a test-driven, local-only `build_rb_rushing_yards_training_dataset` module. It should accept injected normalized RB rows and schedule rows, emit the proposed raw row contract with finite observed targets and prior-only features, and add focused synthetic tests for Week 1, same-week exclusion, zero rows, cold starts, and a team change. Do not add splitting, models, depth eligibility joins, or live loading in that task.
+The focused raw builder is complete. The next task, after review of this contract, is a dedicated chronological RB split/audit design; do not add models, depth eligibility joins, or live loading as part of that task.

@@ -1,5 +1,14 @@
 """Football model-training dataset builders and temporal splits."""
 
+from football.training.build_rb_rushing_yards_dataset import (
+    FEATURE_COLUMNS as RB_RUSHING_YARDS_FEATURE_COLUMNS,
+    METADATA_COLUMNS as RB_RUSHING_YARDS_METADATA_COLUMNS,
+    OUTPUT_COLUMNS as RB_RUSHING_YARDS_OUTPUT_COLUMNS,
+    TARGET_COLUMN as RB_RUSHING_YARDS_TARGET_COLUMN,
+    TARGET_KEY as RB_RUSHING_YARDS_TARGET_KEY,
+    build_rb_rushing_yards_training_dataset,
+)
+
 from football.training.split_qb_passing_yards_dataset import (
     QBPassingYardsDatasetSplit,
     split_qb_passing_yards_dataset,
@@ -146,6 +155,12 @@ from football.training.qb_passing_yards_production_model import (
 )
 
 __all__ = [
+    "RB_RUSHING_YARDS_FEATURE_COLUMNS",
+    "RB_RUSHING_YARDS_METADATA_COLUMNS",
+    "RB_RUSHING_YARDS_OUTPUT_COLUMNS",
+    "RB_RUSHING_YARDS_TARGET_COLUMN",
+    "RB_RUSHING_YARDS_TARGET_KEY",
+    "build_rb_rushing_yards_training_dataset",
     "QBPassingYardsDatasetSplit",
     "split_qb_passing_yards_dataset",
     "QBPassingYardsBaseline",
