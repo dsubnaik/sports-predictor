@@ -8,6 +8,10 @@ from football.training.build_rb_rushing_yards_dataset import (
     TARGET_KEY as RB_RUSHING_YARDS_TARGET_KEY,
     build_rb_rushing_yards_training_dataset,
 )
+from football.training.split_rb_rushing_yards_dataset import (
+    RBRushingYardsDatasetSplit,
+    split_rb_rushing_yards_dataset,
+)
 
 from football.training.split_qb_passing_yards_dataset import (
     QBPassingYardsDatasetSplit,
@@ -161,6 +165,8 @@ __all__ = [
     "RB_RUSHING_YARDS_TARGET_COLUMN",
     "RB_RUSHING_YARDS_TARGET_KEY",
     "build_rb_rushing_yards_training_dataset",
+    "RBRushingYardsDatasetSplit",
+    "split_rb_rushing_yards_dataset",
     "QBPassingYardsDatasetSplit",
     "split_qb_passing_yards_dataset",
     "QBPassingYardsBaseline",

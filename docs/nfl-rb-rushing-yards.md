@@ -1,8 +1,8 @@
-# NFL RB Rushing-Yards Modeling: Population Policy Proposal
+# NFL RB Rushing-Yards Modeling: Population Policy
 
 ## Status and scope
 
-This is a proposed data-population policy for a future RB rushing-yards dataset. It documents what the current repository can support; it does not create a dataset, fit a model, generate predictions, download data, or freeze the policy.
+This documents the implemented raw RB training dataset and deterministic chronological split. It does not fit a model, generate predictions, or download data.
 
 The central distinction is intentional:
 
@@ -25,7 +25,7 @@ Those sets answer different questions and must not be silently substituted for o
 | Validation | `(2025, 1)` through before `(2026, 1)` |
 | Holdout | `(2026, 1)` and later |
 
-The splitter itself is generic and parameterized; those years are the QB workflow's configured boundaries, not an RB policy already implemented. `football.training.audit_qb_passing_yards_dataset.audit_qb_passing_yards_dataset` validates schema, keys, chronology, history indicators, and partition overlap. It reads targets only from train and validation; test structure can be audited without reading test targets. QB candidate comparison and selection fit on train only and evaluate validation only. After selection is frozen, `football.training.qb_passing_yards_production_model.train_qb_passing_yards_production_model` refits that frozen specification on train plus validation, never `dataset_split.test`; the protected 2026 holdout remains excluded. This test-blind lifecycle should be copied for RB work.
+The RB API is `football.training.split_rb_rushing_yards_dataset.split_rb_rushing_yards_dataset`. Its defaults are `minimum_target_season=2021`, `validation_start=(2025, 1)`, and `test_start=(2026, 1)`. It excludes rows before 2021, assigns eligible rows strictly before `(2025, 1)` to train, rows from `(2025, 1)` through before `(2026, 1)` to validation, and rows at or after `(2026, 1)` to test. Membership depends only on those values and `(season, week)`; no target, feature, workload, role, or missingness filter is applied. It validates RB dataset keys and chronology, retains every column unchanged, and keeps all players in a game together. The 2026-and-later test partition is a protected holdout: selection and fitting work must not inspect its targets or use it until a final, separately authorized comparison.
 
 ### RB-specific building blocks
 
@@ -51,9 +51,9 @@ Synthetic fixtures establish that an observed RB row can have zero carries and z
 
 The code and fixtures do not establish source completeness for every active RB, inactive RB, special-teams-only player, or player with no recorded stat line. They also do not establish historical pregame participant coverage. Claims and metrics must therefore be limited to represented, outcome-observed RB player-games unless a separately validated dated participant source is joined.
 
-## 3. Proposed population policy
+## 3. Population policy
 
-### Initial recommendation
+### Implemented outcome-observed policy
 
 For the first dataset, retain every normalized regular-season RB player-game that has schedule context and a finite observed `rushing_yards` target. Do not apply a target-game usage threshold or select a target-game team leader. This is an outcome-observed research population, not proof that each row was a pregame candidate.
 
@@ -102,4 +102,4 @@ Use the same train/validation/test chronology and test-blind lifecycle as QB onc
 
 These evaluations could support claims about error on represented, outcome-observed RB rows and, for the dated-snapshot subset, on the stated pregame candidate definition. They cannot establish performance for all true actives, all rostered players, or unobserved player-games.
 
-The focused raw builder is complete. The next task, after review of this contract, is a dedicated chronological RB split/audit design; do not add models, depth eligibility joins, or live loading as part of that task.
+The focused raw builder and deterministic chronological split are complete. No RB model, audit, depth-eligibility join, or live loader is included here.
