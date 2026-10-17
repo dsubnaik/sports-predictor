@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-This documents the implemented raw RB training dataset and deterministic chronological split. It does not fit a model, generate predictions, or download data.
+This documents the implemented raw RB training dataset, deterministic chronological split, and protected-holdout-safe structural audit. It does not fit a model, generate predictions, or download data.
 
 The central distinction is intentional:
 
@@ -26,6 +26,8 @@ Those sets answer different questions and must not be silently substituted for o
 | Holdout | `(2026, 1)` and later |
 
 The RB API is `football.training.split_rb_rushing_yards_dataset.split_rb_rushing_yards_dataset`. Its defaults are `minimum_target_season=2021`, `validation_start=(2025, 1)`, and `test_start=(2026, 1)`. It excludes rows before 2021, assigns eligible rows strictly before `(2025, 1)` to train, rows from `(2025, 1)` through before `(2026, 1)` to validation, and rows at or after `(2026, 1)` to test. Membership depends only on those values and `(season, week)`; no target, feature, workload, role, or missingness filter is applied. It validates RB dataset keys and chronology, retains every column unchanged, and keeps all players in a game together. The 2026-and-later test partition is a protected holdout: selection and fitting work must not inspect its targets or use it until a final, separately authorized comparison.
+
+`football.training.audit_rb_rushing_yards_dataset.audit_rb_rushing_yards_dataset` accepts that split and returns only scalar structural and pregame-feature diagnostics for every partition: row/player/game counts, time ranges, per-feature missingness and infinity counts, history/sample-size anomalies, team-change counts, and pregame workload/share distributions. Its initial slices are missing versus available player history; available history under three versus at least three games; missing, under `0.30`, or at-least-`0.30` prior last-three opportunity share; and changed/unchanged/unknown prior-team status. These are pregame fields, not labels for starters, leaders, or committee roles. The audit reads and summarizes `target_rushing_yards` only in train. Validation and test reports explicitly select only identifier, diagnostic, and canonical pregame columns, so their target column may be absent or arbitrary without changing the report. The audit reports anomalies but does not correct data or prove that a dataset is free of leakage.
 
 ### RB-specific building blocks
 
@@ -102,4 +104,4 @@ Use the same train/validation/test chronology and test-blind lifecycle as QB onc
 
 These evaluations could support claims about error on represented, outcome-observed RB rows and, for the dated-snapshot subset, on the stated pregame candidate definition. They cannot establish performance for all true actives, all rostered players, or unobserved player-games.
 
-The focused raw builder and deterministic chronological split are complete. No RB model, audit, depth-eligibility join, or live loader is included here.
+The focused raw builder, deterministic chronological split, and protected-holdout-safe audit are complete. No RB model, depth-eligibility join, or live loader is included here.
